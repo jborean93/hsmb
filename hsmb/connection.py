@@ -25,6 +25,7 @@ class SMBConnection:
         identifier: uuid.UUID,
     ) -> None:
         self.config = config
+        self.identifier = identifier
         self._data_to_send = bytearray()
 
     def send(
@@ -132,7 +133,7 @@ class SMBConnection:
             signature=b"",
         )
 
-        self._data_to_send += header
+        self._data_to_send += header.pack()
         self._data_to_send += message.pack()
 
     def data_to_send(

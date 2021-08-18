@@ -119,7 +119,7 @@ class SMBMessage:
         raise NotImplementedError()
 
     @classmethod
-    def unpack(self, data: bytes) -> "SMBMessage":
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "SMBMessage":
         raise NotImplementedError()
 
 
@@ -131,7 +131,7 @@ class NegotiateRequest(SMBMessage):
     security_mode: SecurityModes
     capabilities: Capabilities
     client_guid: uuid.UUID
-    negotiate_contexts: typing.List
+    negotiate_contexts: typing.List[NegotiateContext]
 
     def __init__(
         self,
@@ -150,10 +150,55 @@ class NegotiateRequest(SMBMessage):
         object.__setattr__(self, "negotiate_contexts", negotiate_contexts or [])
 
     def pack(self) -> bytes:
-        return b""
+        dialects = b"".join(d.to_bytes(2, byteorder="little") for d in self.dialects)
+        negotiate_offset = 0
+        padding_size = 0
+        negotiate_contexts = []
+
+        if self.negotiate_contexts:
+            mod = len(dialects) % 8
+            padding_size = (8 - mod) if mod else 0
+            # 100 == header + negotiate structure size
+            negotiate_offset = 100 + len(dialects) + padding_size
+
+            for context in self.negotiate_contexts:
+                context_data = context.pack()
+                mod = len(context_data) % 8
+                padding_size = (8 - mod) if mod else 0
+
+                negotiate_contexts.append(
+                    b"".join(
+                        [
+                            context.context_type.to_bytes(2, byteorder="little"),
+                            len(context_data).to_bytes(2, byteorder="little"),
+                            b"\x00\x00\x00\x00",  # Reserved
+                            context_data,
+                            b"\x00" * padding_size,
+                        ]
+                    )
+                )
+
+        return b"".join(
+            [
+                b"\x24\x00",  # StructureSize(36)
+                len(self.dialects).to_bytes(2, byteorder="little"),
+                self.security_mode.value.to_bytes(2, byteorder="little"),
+                b"\x00\x00",  # Reserved,
+                self.capabilities.value.to_bytes(4, byteorder="little"),
+                self.client_guid.bytes,
+                negotiate_offset.to_bytes(4, byteorder="little"),
+                len(self.negotiate_contexts).to_bytes(2, byteorder="little"),
+                b"\x00\x00",  # Reserved2
+                dialects,
+                (b"\x00" * padding_size),
+                b"".join(negotiate_contexts),
+            ]
+        )
 
     @classmethod
-    def unpack(self, data: bytes) -> "NegotiateRequest":
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "NegotiateRequest":
+        view = memoryview(data)
+
         raise NotImplementedError()
 
 
@@ -212,6 +257,15 @@ class NegotiateResponse(SMBMessage):
         object.__setattr__(self, "server_start_time", server_start_time)
         object.__setattr__(self, "security_buffer", security_buffer)
         object.__setattr__(self, "negotiate_contexts", negotiate_contexts or [])
+
+    def pack(self) -> bytes:
+        raise NotImplementedError()
+
+    @classmethod
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "NegotiateResponse":
+        view = memoryview(data)
+
+        raise NotImplementedError()
 
 
 @dataclasses.dataclass(frozen=True)

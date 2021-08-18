@@ -4,6 +4,7 @@
 
 import dataclasses
 import enum
+import struct
 import typing
 
 
@@ -63,6 +64,13 @@ class NegotiateContext:
 
     context_type: ContextType
 
+    def pack(self) -> bytes:
+        raise NotImplementedError()
+
+    @classmethod
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "NegotiateContext":
+        raise NotImplementedError()
+
 
 @dataclasses.dataclass(frozen=True)
 class PreauthIntegrityCapabilities(NegotiateContext):
@@ -81,6 +89,37 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         object.__setattr__(self, "hash_algorithms", hash_algorithms)
         object.__setattr__(self, "salt", salt)
 
+    def pack(self) -> bytes:
+        return b"".join(
+            [
+                len(self.hash_algorithms).to_bytes(2, byteorder="little"),
+                len(self.salt).to_bytes(2, byteorder="little"),
+                b"".join(h.value.to_bytes(2, byteorder="little") for h in self.hash_algorithms),
+                self.salt,
+            ]
+        )
+
+    @classmethod
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "PreauthIntegrityCapabilities":
+        view = memoryview(data)
+
+        algorithm_count = struct.unpack("<H", view[0:2])[0]
+        algorithm_length = algorithm_count * 2
+        salt_length = struct.unpack("<H", view[2:4])[0]
+
+        algorithms = []
+        for i in range(algorithm_count):
+            offset = i * 2
+            val = struct.unpack("<H", view[4 + offset : 6 + offset])[0]
+            algorithms.append(HashAlgorithm(val))
+
+        salt = bytes(view[4 + algorithm_length : 4 + algorithm_length + salt_length])
+
+        return PreauthIntegrityCapabilities(
+            hash_algorithms=algorithms,
+            salt=salt,
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class EncryptionCapabilities(NegotiateContext):
@@ -95,6 +134,28 @@ class EncryptionCapabilities(NegotiateContext):
     ) -> None:
         super().__init__(ContextType.ENCRYPTION_CAPABILITIES)
         object.__setattr__(self, "ciphers", ciphers)
+
+    def pack(self) -> bytes:
+        return b"".join(
+            [
+                len(self.ciphers).to_bytes(2, byteorder="little"),
+                b"".join(c.value.to_bytes(2, byteorder="little") for c in self.ciphers),
+            ]
+        )
+
+    @classmethod
+    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "EncryptionCapabilities":
+        view = memoryview(data)
+
+        cipher_count = struct.unpack("<H", view[0:2])[0]
+
+        ciphers = []
+        for i in range(cipher_count):
+            offset = i * 2
+            val = struct.unpack("<H", view[2 + offset : 4 + offset])[0]
+            ciphers.append(Cipher(val))
+
+        return EncryptionCapabilities(ciphers=ciphers)
 
 
 @dataclasses.dataclass(frozen=True)

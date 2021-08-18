@@ -1,15 +1,24 @@
+import asyncio
 import uuid
 
-from hsmb import Dialect, NegotiateRequest, PreauthIntegrityCapabilities
-
-pre_auth = PreauthIntegrityCapabilities(hash_algorithms=[], salt=b"")
-req = NegotiateRequest(
-    dialects=[Dialect.smb311],
-    security_mode=1,
-    capabilities=2,
-    client_guid=uuid.uuid4(),
-    negotiate_contexts=[],
-)
+import hsmb
 
 
-a = ""
+async def main() -> None:
+    reader, writer = await asyncio.open_connection("127.0.0.1", 445)
+    conn = hsmb.SMBConnection(hsmb.SMBConfiguration(hsmb.SMBRole.CLIENT), uuid.uuid4())
+
+    nego = hsmb.NegotiateRequest(
+        dialects=[],
+        security_mode=hsmb.SecurityModes.SIGNING_ENABLED,
+        capabilities=hsmb.Capabilities.CAP_ENCRYPTION,
+        client_guid=conn.identifier,
+        negotiate_contexts=[],
+    )
+    conn.send(nego)
+
+    a = ""
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
