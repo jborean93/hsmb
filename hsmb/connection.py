@@ -2,12 +2,15 @@
 # Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
+import enum
 import typing
 import uuid
 
-from hsmb._headers import HeaderFlags, PacketHeaderSync
+from hsmb._config import SMBConfiguration, SMBRole
+from hsmb._headers import HeaderFlags, PacketHeaderAsync, PacketHeaderSync
 from hsmb._messages import (
     Capabilities,
+    Command,
     Dialect,
     NegotiateRequest,
     SecurityModes,
@@ -18,35 +21,119 @@ from hsmb._messages import (
 class SMBConnection:
     def __init__(
         self,
+        config: SMBConfiguration,
+        identifier: uuid.UUID,
     ) -> None:
-        self.require_message_signing = True
-        self.is_encryption_supported = True
-        self.is_compression_supported = False
-        self.is_changed_compression_supported = False
-        self.is_rdma_transform_supported = False
-        self.disable_encryption_over_secure_transport = False
-
+        self.config = config
         self._data_to_send = bytearray()
 
     def send(
         self,
         message: SMBMessage,
+        channel_sequence: int = 0,
+        status: int = 0,
+        credits: int = 0,
+        related: bool = False,
+        priority: typing.Optional[int] = 0,
+        session_id: int = 0,
+        tree_id: int = 0,
+        final: bool = True,
     ) -> None:
+        flags = HeaderFlags.NONE
+
+        if self.config.role == SMBRole.CLIENT:
+            if status:
+                raise ValueError("Client cannot set status")
+
+        else:
+            if channel_sequence:
+                raise ValueError("Server cannot set channel sequence")
+
+            flags |= HeaderFlags.SERVER_TO_REDIR
+
+        if related:
+            flags |= HeaderFlags.RELATED_OPERATIONS
+
+        if priority is not None:
+            if priority < 0 or priority > 7:
+                raise ValueError("Priority must be between 0 and 7")
+            flags |= priority << 4
+
+        # FIXME
+        credit_charge = 0
+        next_command = 0
+        message_id = 0
+
         header = PacketHeaderSync(
-            credit_charge=0,
-            channel_sequence=0,
-            status=0,
+            credit_charge=credit_charge,
+            channel_sequence=channel_sequence,
+            status=status,
             command=message.command,
-            credits=0,
-            flags=HeaderFlags.none,
-            next_command=0,
-            message_id=0,
-            tree_id=0,
-            session_id=0,
+            credits=credits,
+            flags=flags,
+            next_command=next_command,
+            message_id=message_id,
+            tree_id=tree_id,
+            session_id=session_id,
+            signature=b"\x00" * 16,
+        ).pack()
+
+        self._data_to_send += header
+        self._data_to_send += message.pack()
+
+    def send_async(
+        self,
+        message: SMBMessage,
+        channel_sequence: int = 0,
+        status: int = 0,
+        credits: int = 0,
+        related: bool = False,
+        priority: typing.Optional[int] = 0,
+        session_id: int = 0,
+        async_id: int = 0,
+        final: bool = True,
+    ) -> None:
+        flags = HeaderFlags.ASYNC_COMMAND
+
+        if self.config.role == SMBRole.CLIENT:
+            if status:
+                raise ValueError("Client cannot set status")
+
+        else:
+            if channel_sequence:
+                raise ValueError("Server cannot set channel sequence")
+
+            flags |= HeaderFlags.SERVER_TO_REDIR
+
+        if related:
+            flags |= HeaderFlags.RELATED_OPERATIONS
+
+        if priority is not None:
+            if priority < 0 or priority > 7:
+                raise ValueError("Priority must be between 0 and 7")
+            flags |= priority << 4
+
+        # FIXME
+        credit_charge = 0
+        next_command = 0
+        message_id = 0
+
+        header = PacketHeaderAsync(
+            credit_charge=credit_charge,
+            channel_sequence=channel_sequence,
+            status=status,
+            command=message.command,
+            credits=credits,
+            flags=flags,
+            next_command=next_command,
+            message_id=message_id,
+            async_id=async_id,
+            session_id=session_id,
             signature=b"",
         )
 
-        a = ""
+        self._data_to_send += header
+        self._data_to_send += message.pack()
 
     def data_to_send(
         self,
@@ -64,95 +151,3 @@ class SMBConnection:
         self,
     ) -> None:
         return
-
-
-class SMBClient(SMBConnection):
-    def __init__(
-        self,
-    ) -> None:
-        self.global_file_table: typing.Dict[str, typing.Any] = {}
-        self.client_guid = uuid.uuid4()
-        self.max_dialect = Dialect.smb311
-        self.require_secure_negotiate = True
-        self.server_list: typing.Dict[str, typing.Any] = {}
-        self.share_list: typing.Dict[str, typing.Any] = {}
-        self.compress_all_requests = False
-
-    def negotiate(
-        self,
-        dialects: typing.Optional[typing.List[Dialect]] = None,
-    ) -> None:
-        if dialects is not None:
-            nego_dialects = dialects
-        else:
-            nego_dialects = [
-                Dialect.smb202,
-                Dialect.smb210,
-                Dialect.smb300,
-                Dialect.smb302,
-                Dialect.smb311,
-            ]
-
-        security_mode = SecurityModes.signing_enabled
-        if self.require_message_signing:
-            security_mode |= SecurityModes.signing_required
-
-        capabilities = Capabilities.none
-
-        self.send(
-            NegotiateRequest(
-                dialects=nego_dialects,
-                security_mode=security_mode,
-                capabilities=capabilities,
-                client_guid=self.client_guid,
-                negotiate_contexts=[],
-            )
-        )
-
-    def session_setup(self) -> None:
-        pass
-
-    def logoff(self) -> None:
-        pass
-
-    def tree_connect(self) -> None:
-        pass
-
-    def create(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-    def flush(self) -> None:
-        pass
-
-    def read(self) -> None:
-        pass
-
-    def write(self) -> None:
-        pass
-
-    def oplock_break(self) -> None:
-        pass
-
-    def lock(self) -> None:
-        pass
-
-    def echo(self) -> None:
-        pass
-
-    def cancel(self) -> None:
-        pass
-
-    def ioctl(self) -> None:
-        pass
-
-    def query_directory(self) -> None:
-        pass
-
-    def change_notify(self) -> None:
-        pass
-
-    def set_info(self) -> None:
-        pass

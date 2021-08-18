@@ -76,7 +76,7 @@ commands_pre =
     poetry install
 
 commands =
-    poetry run python -m pytest -v --cov psrpcore --cov-report term-missing
+    poetry run python -m pytest -v --cov hsmb --cov-report term-missing
 
 [testenv:sanity]
 commands =

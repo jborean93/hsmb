@@ -11,100 +11,102 @@ from hsmb._negotiate_contexts import NegotiateContext
 
 
 class Command(enum.IntEnum):
-    negotiate = 0x0000
-    session_setup = 0x0001
-    logoff = 0x0002
-    tree_connect = 0x0003
-    tree_disconnect = 0x0004
-    create = 0x0005
-    close = 0x0006
-    flush = 0x0007
-    read = 0x0008
-    write = 0x0009
-    lock = 0x000A
-    ioctl = 0x000B
-    cancel = 0x000C
-    echo = 0x000D
-    query_directory = 0x000E
-    change_notify = 0x000F
-    query_info = 0x0010
-    set_info = 0x0011
-    oplock_break = 0x0011
+    NEGOTIATE = 0x0000
+    SESSION_SETUP = 0x0001
+    LOGOFF = 0x0002
+    TREE_CONNECT = 0x0003
+    TREE_DISCONNECT = 0x0004
+    CREATE = 0x0005
+    CLOSE = 0x0006
+    FLUSH = 0x0007
+    READ = 0x0008
+    WRITE = 0x0009
+    LOCK = 0x000A
+    IOCTL = 0x000B
+    CANCEL = 0x000C
+    ECHO = 0x000D
+    QUERY_DIRECTORY = 0x000E
+    CHANGE_NOTIFY = 0x000F
+    QUERY_INFO = 0x0010
+    SET_INFO = 0x0011
+    OPLOCK_BREAK = 0x0011
 
 
 class Dialect(enum.IntEnum):
-    smb202 = 0x0202
-    smb210 = 0x0210
-    smb300 = 0x0300
-    smb302 = 0x0302
-    smb311 = 0x0311
-    smb2_wildcard = 0x02FF
+    UNKNOWN = 0x0000
+    SMB202 = 0x0202
+    SMB210 = 0x0210
+    SMB300 = 0x0300
+    SMB302 = 0x0302
+    SMB311 = 0x0311
+    SMB2_WILDCARD = 0x02FF
 
 
 class SecurityModes(enum.IntFlag):
-    signing_enabled = 0x0001
-    signing_required = 0x0002
+    NONE = 0x0000
+    SIGNING_ENABLED = 0x0001
+    SIGNING_REQUIRED = 0x0002
 
 
 class Capabilities(enum.IntFlag):
-    none = 0x00000000
-    dfs = 0x00000001
-    leasing = 0x00000002
-    large_mtu = 0x00000004
-    multi_channel = 0x00000008
-    persistent_handles = 0x00000010
-    directory_leasing = 0x00000020
-    cap_encryption = 0x00000040
+    NONE = 0x00000000
+    DFS = 0x00000001
+    LEASING = 0x00000002
+    LARGE_MTU = 0x00000004
+    MULTI_CHANNEL = 0x00000008
+    PERSISTENT_HANDLES = 0x00000010
+    DIRECTORY_LEASING = 0x00000020
+    CAP_ENCRYPTION = 0x00000040
 
 
 class SessionSetupFlags(enum.IntFlag):
-    binding = 0x01
+    BINDING = 0x01
 
 
 class SessionFlags(enum.IntFlag):
-    is_guest = 0x0001
-    is_null = 0x0002
-    encrypt_data = 0x0004
+    IS_GUEST = 0x0001
+    IS_NULL = 0x0002
+    ENCRYPT_DATA = 0x0004
 
 
 class TreeConnectFlags(enum.IntFlag):
-    cluster_reconnect = 0x0001
-    redirect_to_owner = 0x0002
-    extension_present = 0x0004
+    CLUSTER_RECONNECT = 0x0001
+    REDIRECT_TO_OWNER = 0x0002
+    EXTENSION_PRESENT = 0x0004
 
 
 class ShareType(enum.IntEnum):
-    disk = 0x01
-    pipe = 0x02
-    print = 0x03
+    DISK = 0x01
+    PIPE = 0x02
+    PRINT = 0x03
 
 
 class ShareFlags(enum.IntFlag):
-    manual_caching = 0x0000000
-    dfs = 0x00000001
-    dfs_root = 0x00000002
-    auto_caching = 0x00000010
-    vdo_caching = 0x00000020
-    no_caching = 0x00000030
-    restrict_exclusive_opens = 0x00000100
-    force_shared_delete = 0x00000200
-    allow_namespace_caching = 0x00000400
-    access_based_directory_enum = 0x00000400
-    force_level2_oplock = 0x00001000
-    enable_hash_v1 = 0x00002000
-    enable_hash_v2 = 0x00004000
-    encrypt_data = 0x00008000
-    identity_remoting = 0x00040000
-    compress_data = 0x00100000
+    MANUAL_CACHING = 0x0000000
+    DFS = 0x00000001
+    DFS_ROOT = 0x00000002
+    AUTO_CACHING = 0x00000010
+    VDO_CACHING = 0x00000020
+    NO_CACHING = 0x00000030
+    RESTRICT_EXCLUSIVE_OPENS = 0x00000100
+    FORCE_SHARED_DELETE = 0x00000200
+    ALLOW_NAMESPACE_CACHING = 0x00000400
+    ACCESS_BASED_DIRECTORY_ENUM = 0x00000400
+    FORCE_LEVEL2_OPLOCK = 0x00001000
+    ENABLE_HASH_V1 = 0x00002000
+    ENABLE_HASH_V2 = 0x00004000
+    ENCRYPT_DATA = 0x00008000
+    IDENTITY_REMOTING = 0x00040000
+    COMPRESS_DATA = 0x00100000
 
 
 class ShareCapabilities(enum.IntFlag):
-    dfs = 0x00000008
-    continuous_availability = 0x00000010
-    scaleout = 0x00000020
-    cap_cluster = 0x00000040
-    asymmetrix = 0x00000080
-    redirect_to_owner = 0x00000100
+    DFS = 0x00000008
+    CONTINUOUS_AVAILABILITY = 0x00000010
+    SCALEOUT = 0x00000020
+    CAP_CLUSTER = 0x00000040
+    ASYMMETRIX = 0x00000080
+    REDIRECT_TO_OWNER = 0x00000100
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,7 +142,7 @@ class NegotiateRequest(SMBMessage):
         client_guid: uuid.UUID,
         negotiate_contexts: typing.Optional[typing.List[NegotiateContext]] = None,
     ) -> None:
-        super().__init__(Command.negotiate)
+        super().__init__(Command.NEGOTIATE)
         object.__setattr__(self, "dialects", dialects)
         object.__setattr__(self, "security_mode", security_mode)
         object.__setattr__(self, "capabilities", capabilities)
@@ -198,7 +200,7 @@ class NegotiateResponse(SMBMessage):
         security_buffer: typing.Optional[bytes] = None,
         negotiate_contexts: typing.Optional[NegotiateContext] = None,
     ) -> None:
-        super().__init__(Command.negotiate)
+        super().__init__(Command.NEGOTIATE)
         object.__setattr__(self, "security_mode", security_mode)
         object.__setattr__(self, "dialect_revision", dialect_revision)
         object.__setattr__(self, "server_guid", server_guid)
@@ -231,7 +233,7 @@ class SessionSetupRequest(SMBMessage):
         previous_session_id: int,
         security_buffer: bytes,
     ) -> None:
-        super().__init__(Command.session_setup)
+        super().__init__(Command.SESSION_SETUP)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "security_mode", security_mode)
         object.__setattr__(self, "capabilities", capabilities)
@@ -252,7 +254,7 @@ class SessionSetupResponse(SMBMessage):
         session_flags: SessionFlags,
         security_buffer: bytes,
     ) -> None:
-        super().__init__(Command.session_setup)
+        super().__init__(Command.SESSION_SETUP)
         object.__setattr__(self, "session_flags", session_flags)
         object.__setattr__(self, "security_buffer", security_buffer)
 
@@ -264,7 +266,7 @@ class LogoffRequest(SMBMessage):
     def __init__(
         self,
     ) -> None:
-        super().__init__(Command.logoff)
+        super().__init__(Command.LOGOFF)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -274,7 +276,7 @@ class LogoffResponse(SMBMessage):
     def __init__(
         self,
     ) -> None:
-        super().__init__(Command.logoff)
+        super().__init__(Command.LOGOFF)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -289,7 +291,7 @@ class TreeConnectRequest(SMBMessage):
         flags: TreeConnectFlags,
         path: str,
     ) -> None:
-        super().__init__(Command.tree_connect)
+        super().__init__(Command.TREE_CONNECT)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "path", path)
 
@@ -310,7 +312,7 @@ class TreeConnectResponse(SMBMessage):
         capabilities: ShareCapabilities,
         maximal_access: int,
     ) -> None:
-        super().__init__(Command.tree_connect)
+        super().__init__(Command.TREE_CONNECT)
         object.__setattr__(self, "share_type", share_type)
         object.__setattr__(self, "share_flags", share_flags)
         object.__setattr__(self, "capabilities", capabilities)
@@ -324,7 +326,7 @@ class TreeDisconnectRequest(SMBMessage):
     def __init__(
         self,
     ) -> None:
-        super().__init__(Command.tree_disconnect)
+        super().__init__(Command.TREE_DISCONNECT)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -334,13 +336,13 @@ class TreeDisconnectResponse(SMBMessage):
     def __init__(
         self,
     ) -> None:
-        super().__init__(Command.tree_disconnect)
+        super().__init__(Command.TREE_DISCONNECT)
 
 
-EVENTS: typing.Dict[Command, typing.Tuple[typing.Type[SMBMessage], typing.Type[SMBMessage]]] = {
-    Command.negotiate: (NegotiateRequest, NegotiateResponse),
-    Command.session_setup: (SessionSetupRequest, SessionSetupResponse),
-    Command.logoff: (LogoffRequest, LogoffResponse),
-    Command.tree_connect: (TreeConnectRequest, TreeConnectResponse),
-    Command.tree_disconnect: (TreeDisconnectRequest, TreeDisconnectResponse),
+MESSAGES: typing.Dict[Command, typing.Tuple[typing.Type[SMBMessage], typing.Type[SMBMessage]]] = {
+    Command.NEGOTIATE: (NegotiateRequest, NegotiateResponse),
+    Command.SESSION_SETUP: (SessionSetupRequest, SessionSetupResponse),
+    Command.LOGOFF: (LogoffRequest, LogoffResponse),
+    Command.TREE_CONNECT: (TreeConnectRequest, TreeConnectResponse),
+    Command.TREE_DISCONNECT: (TreeDisconnectRequest, TreeDisconnectResponse),
 }
