@@ -68,7 +68,11 @@ class NegotiateContext:
         raise NotImplementedError()
 
     @classmethod
-    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "NegotiateContext":
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "NegotiateContext":
         raise NotImplementedError()
 
 
@@ -100,8 +104,12 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         )
 
     @classmethod
-    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "PreauthIntegrityCapabilities":
-        view = memoryview(data)
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "PreauthIntegrityCapabilities":
+        view = memoryview(data)[offset:]
 
         algorithm_count = struct.unpack("<H", view[0:2])[0]
         algorithm_length = algorithm_count * 2
@@ -144,8 +152,12 @@ class EncryptionCapabilities(NegotiateContext):
         )
 
     @classmethod
-    def unpack(cls, data: typing.Union[bytes, bytearray, memoryview]) -> "EncryptionCapabilities":
-        view = memoryview(data)
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "EncryptionCapabilities":
+        view = memoryview(data)[offset:]
 
         cipher_count = struct.unpack("<H", view[0:2])[0]
 
@@ -234,3 +246,81 @@ class SigningCapabilities(NegotiateContext):
     ) -> None:
         super().__init__(ContextType.SIGNING_CAPABILITIES)
         object.__setattr__(self, "sigining_algorithms", sigining_algorithms)
+
+
+def pack_negotiate_context(
+    context: NegotiateContext,
+    pad: bool = False,
+) -> bytes:
+    """Pack the Negotiate Context object.
+
+    Packs the Negotiate Context object into bytes. The value is packed
+    according to the structure defined at `SMB2 NEGOTIATE_CONTEXT Structure`_.
+
+    Args:
+        context: The context to pack.
+        pad: Whether to pad the structure to the nearest 8 byte boundary.
+
+    Returns:
+        bytes: The packed context.
+
+    .. _SMB2 NEGOTIATE_CONTEXT Structure:
+        https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/15332256-522e-4a53-8cd7-0bd17678a2f7
+    """
+    context_data = context.pack()
+    if pad:
+        context_padding_size = 8 - (len(context_data) % 8 or 8)
+    else:
+        context_padding_size = 0
+
+    return b"".join(
+        [
+            context.context_type.to_bytes(2, byteorder="little"),
+            len(context_data).to_bytes(2, byteorder="little"),
+            b"\x00\x00\x00\x00",  # Reserved
+            context_data,
+            b"\x00" * context_padding_size,
+        ]
+    )
+
+
+def unpack_negotiate_context(
+    data: typing.Union[bytes, bytearray, memoryview],
+) -> typing.Tuple[NegotiateContext, int]:
+    """Unpack the Negotiate Context bytes.
+
+    Unpacks the Negotiate Context bytes value to the object it represents. The
+    value is unpacked according to the structure defined at
+    `SMB2 NEGOTIATE_CONTEXT Structure`_.
+
+    Args:
+        data: The data to unpack.
+
+    Returns:
+        Tuple[NegotiateContext, int]: The unpacked context and the length of
+        context (including padding to the 8 byte boundary) that was unpacked.
+
+    .. _SMB2 NEGOTIATE_CONTEXT Structure:
+        https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/15332256-522e-4a53-8cd7-0bd17678a2f7
+    """
+    view = memoryview(data)
+
+    context_type = ContextType(struct.unpack("<H", view[0:2])[0])
+    context_length = struct.unpack("<H", view[2:4])[0]
+    context_data = view[8 : 8 + context_length]
+
+    context_cls: typing.Optional[typing.Type[NegotiateContext]] = {
+        ContextType.PREAUTH_INTEGRITY_CAPABILITIES: PreauthIntegrityCapabilities,
+        ContextType.ENCRYPTION_CAPABILITIES: EncryptionCapabilities,
+        ContextType.COMPRESSION_CAPABILITIES: CompressionCapabilities,
+        ContextType.NETNAME_NEGOTIATE_CONTEXT_ID: NetnameNegotiate,
+        ContextType.TRANSPORT_CAPABILITIES: TransportCapabilities,
+        ContextType.RDMA_TRANSFORM_CAPABILITIES: RdmaTransformCapabilities,
+        ContextType.SIGNING_CAPABILITIES: SigningCapabilities,
+    }.get(context_type, None)
+    if not context_cls:
+        raise ValueError(f"Unknown negotiate context type {context_type}")
+
+    context_padding_size = 8 - (context_length % 8 or 8)
+
+    return context_cls.unpack(context_data), 8 + context_length + context_padding_size
