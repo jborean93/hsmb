@@ -187,6 +187,35 @@ class CompressionCapabilities(NegotiateContext):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "compression_algorithms", compression_algorithms)
 
+    def pack(self) -> bytes:
+        return b"".join(
+            [
+                len(self.compression_algorithms).to_bytes(2, byteorder="little"),
+                b"\x00\x00",  # Padding
+                self.flags.value.to_bytes(4, byteorder="little"),
+                b"".join(c.value.to_bytes(2, byteorder="little") for c in self.compression_algorithms),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "CompressionCapabilities":
+        view = memoryview(data)[offset:]
+
+        algo_count = struct.unpack("<H", view[0:2])[0]
+        flags = CompressionCapabilityFlags(struct.unpack("<I", view[4:8])[0])
+
+        algos = []
+        for i in range(algo_count):
+            offset = i * 2
+            val = struct.unpack("<H", view[8 + offset : 10 + offset])[0]
+            algos.append(CompressionAlgorithm(val))
+
+        return CompressionCapabilities(flags=flags, compression_algorithms=algos)
+
 
 @dataclasses.dataclass(frozen=True)
 class NetnameNegotiate(NegotiateContext):
@@ -201,6 +230,19 @@ class NetnameNegotiate(NegotiateContext):
     ) -> None:
         super().__init__(ContextType.NETNAME_NEGOTIATE_CONTEXT_ID)
         object.__setattr__(self, "net_name", net_name)
+
+    def pack(self) -> bytes:
+        return self.net_name.encode("utf-16-le")
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "NetnameNegotiate":
+        view = memoryview(data)[offset:]
+
+        return NetnameNegotiate(net_name=bytes(view).decode("utf-16-le"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,6 +259,20 @@ class TransportCapabilities(NegotiateContext):
         super().__init__(ContextType.TRANSPORT_CAPABILITIES)
         object.__setattr__(self, "flags", flags)
 
+    def pack(self) -> bytes:
+        return self.flags.value.to_bytes(4, byteorder="little")
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "TransportCapabilities":
+        view = memoryview(data)[offset:]
+
+        flags = TransportCapabilityFlags(struct.unpack("<I", view[0:4])[0])
+        return TransportCapabilities(flags=flags)
+
 
 @dataclasses.dataclass(frozen=True)
 class RdmaTransformCapabilities(NegotiateContext):
@@ -232,6 +288,34 @@ class RdmaTransformCapabilities(NegotiateContext):
         super().__init__(ContextType.RDMA_TRANSFORM_CAPABILITIES)
         object.__setattr__(self, "rdma_transform_ids", rdma_transform_ids)
 
+    def pack(self) -> bytes:
+        return b"".join(
+            [
+                len(self.rdma_transform_ids).to_bytes(2, byteorder="little"),
+                b"\x00\x00",  # Reserved1
+                b"\x00\x00\x00\x00",  # Reserved2
+                b"".join(r.value.to_bytes(2, byteorder="little") for r in self.rdma_transform_ids),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "RdmaTransformCapabilities":
+        view = memoryview(data)[offset:]
+
+        transform_count = struct.unpack("<H", view[0:2])[0]
+
+        ids = []
+        for i in range(transform_count):
+            offset = i * 2
+            val = struct.unpack("<H", view[8 + offset : 10 + offset])[0]
+            ids.append(RdmaTransformId(val))
+
+        return RdmaTransformCapabilities(rdma_transform_ids=ids)
+
 
 @dataclasses.dataclass(frozen=True)
 class SigningCapabilities(NegotiateContext):
@@ -242,15 +326,40 @@ class SigningCapabilities(NegotiateContext):
     def __init__(
         self,
         *,
-        sigining_algorithms: typing.List[SigningAlgorithm],
+        signing_algorithms: typing.List[SigningAlgorithm],
     ) -> None:
         super().__init__(ContextType.SIGNING_CAPABILITIES)
-        object.__setattr__(self, "sigining_algorithms", sigining_algorithms)
+        object.__setattr__(self, "signing_algorithms", signing_algorithms)
+
+    def pack(self) -> bytes:
+        return b"".join(
+            [
+                len(self.signing_algorithms).to_bytes(2, byteorder="little"),
+                b"".join(a.value.to_bytes(2, byteorder="little") for a in self.signing_algorithms),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> "SigningCapabilities":
+        view = memoryview(data)[offset:]
+
+        algo_count = struct.unpack("<H", view[0:2])[0]
+
+        algos = []
+        for i in range(algo_count):
+            offset = i * 2
+            val = struct.unpack("<H", view[2 + offset : 4 + offset])[0]
+            algos.append(SigningAlgorithm(val))
+
+        return SigningCapabilities(signing_algorithms=algos)
 
 
 def pack_negotiate_context(
     context: NegotiateContext,
-    pad: bool = False,
 ) -> bytes:
     """Pack the Negotiate Context object.
 
@@ -259,7 +368,6 @@ def pack_negotiate_context(
 
     Args:
         context: The context to pack.
-        pad: Whether to pad the structure to the nearest 8 byte boundary.
 
     Returns:
         bytes: The packed context.
@@ -268,10 +376,6 @@ def pack_negotiate_context(
         https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/15332256-522e-4a53-8cd7-0bd17678a2f7
     """
     context_data = context.pack()
-    if pad:
-        context_padding_size = 8 - (len(context_data) % 8 or 8)
-    else:
-        context_padding_size = 0
 
     return b"".join(
         [
@@ -279,7 +383,6 @@ def pack_negotiate_context(
             len(context_data).to_bytes(2, byteorder="little"),
             b"\x00\x00\x00\x00",  # Reserved
             context_data,
-            b"\x00" * context_padding_size,
         ]
     )
 
@@ -321,6 +424,4 @@ def unpack_negotiate_context(
     if not context_cls:
         raise ValueError(f"Unknown negotiate context type {context_type}")
 
-    context_padding_size = 8 - (context_length % 8 or 8)
-
-    return context_cls.unpack(context_data), 8 + context_length + context_padding_size
+    return context_cls.unpack(context_data), 8 + context_length

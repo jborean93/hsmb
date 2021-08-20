@@ -1,4 +1,4 @@
-from hsmb._config import SMBConfiguration, SMBRole
+from hsmb._config import SMBClientConfig, SMBRole, SMBServerConfig
 from hsmb._headers import (
     SMB1Header,
     SMB1HeaderFlags,
@@ -21,7 +21,7 @@ from hsmb._negotiate_contexts import (
     HashAlgorithm,
     PreauthIntegrityCapabilities,
 )
-from hsmb.connection import SMBConnection
+from hsmb.connection import SMBClientConnection
 
 __all__ = [
     "Capabilities",
@@ -39,8 +39,9 @@ __all__ = [
     "SMB1NegotiateResponse",
     "SMB2HeaderAsync",
     "SMB2HeaderSync",
-    "SMBConfiguration",
-    "SMBConnection",
+    "SMBClientConfig",
+    "SMBClientConnection",
     "SMBRole",
+    "SMBServerConfig",
     "unpack_header",
 ]

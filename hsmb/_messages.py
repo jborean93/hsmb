@@ -35,6 +35,7 @@ class Command(enum.IntEnum):
     QUERY_INFO = 0x0010
     SET_INFO = 0x0011
     OPLOCK_BREAK = 0x0011
+    SMB1_NEGOTIATE = 0x0072
 
 
 class Dialect(enum.IntEnum):
@@ -128,12 +129,12 @@ class SMBMessage:
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "SMBMessage":
+    ) -> typing.Tuple["SMBMessage", int]:
         raise NotImplementedError()
 
 
 @dataclasses.dataclass(frozen=True)
-class SMB1NegotiateRequest:
+class SMB1NegotiateRequest(SMBMessage):
     __slots__ = ("dialects",)
 
     dialects: typing.List[str]
@@ -143,6 +144,7 @@ class SMB1NegotiateRequest:
         *,
         dialects: typing.List[str],
     ) -> None:
+        super().__init__(Command.SMB1_NEGOTIATE)
         object.__setattr__(self, "dialects", dialects)
 
     def pack(self) -> bytes:
@@ -161,14 +163,15 @@ class SMB1NegotiateRequest:
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "SMB1NegotiateRequest":
+    ) -> typing.Tuple["SMB1NegotiateRequest", int]:
+        # FIXME
         dialects: typing.List[str] = []
 
-        return SMB1NegotiateRequest(dialects=dialects)
+        return SMB1NegotiateRequest(dialects=dialects), 0
 
 
 @dataclasses.dataclass(frozen=True)
-class SMB1NegotiateResponse:
+class SMB1NegotiateResponse(SMBMessage):
     __slots__ = ("selected_index",)
 
     selected_index: int
@@ -178,6 +181,7 @@ class SMB1NegotiateResponse:
         *,
         selected_index: int,
     ):
+        super().__init__(Command.SMB1_NEGOTIATE)
         object.__setattr__(self, "selected_index", selected_index)
 
     def pack(self) -> bytes:
@@ -194,11 +198,12 @@ class SMB1NegotiateResponse:
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "SMB1NegotiateResponse":
+    ) -> typing.Tuple["SMB1NegotiateResponse", int]:
+        # FIXME
         view = memoryview(data)[offset:]
 
         selected_index = struct.unpack("<h", view[1:3])[0]
-        return SMB1NegotiateResponse(selected_index=selected_index)
+        return SMB1NegotiateResponse(selected_index=selected_index), 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -241,7 +246,12 @@ class NegotiateRequest(SMBMessage):
 
             last_idx = len(self.negotiate_contexts) - 1
             for idx, context in enumerate(self.negotiate_contexts):
-                negotiate_contexts.append(pack_negotiate_context(context, pad=idx != last_idx))
+                context_data = pack_negotiate_context(context)
+                negotiate_contexts.append(context_data)
+
+                context_padding_size = 8 - (len(context_data) % 8 or 8)
+                if idx != last_idx and context_padding_size:
+                    negotiate_contexts.append(b"\x00" * context_padding_size)
 
         return b"".join(
             [
@@ -265,7 +275,7 @@ class NegotiateRequest(SMBMessage):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "NegotiateRequest":
+    ) -> typing.Tuple["NegotiateRequest", int]:
         view = memoryview(data)[offset:]
 
         dialect_count = struct.unpack("<H", view[2:4])[0]
@@ -275,25 +285,35 @@ class NegotiateRequest(SMBMessage):
         context_offset = struct.unpack("<I", view[28:32])[0] - 64
         context_count = struct.unpack("<H", view[32:34])[0]
 
-        dialect_view = view[36:]
+        end_idx = 36
         dialects: typing.List[Dialect] = []
         for _ in range(dialect_count):
-            dialects.append(Dialect(struct.unpack("<H", dialect_view[:2])[0]))
-            dialect_view = dialect_view[2:]
+            dialects.append(Dialect(struct.unpack("<H", view[end_idx : end_idx + 2])[0]))
+            end_idx += 2
 
-        context_view = view[context_offset:]
         contexts: typing.List[NegotiateContext] = []
-        for _ in range(context_count):
-            ctx, context_offset = unpack_negotiate_context(context_view)
-            contexts.append(ctx)
-            context_view = context_view[context_offset:]
+        if context_count:
+            end_idx = context_offset
 
-        return NegotiateRequest(
-            dialects=dialects,
-            security_mode=security_mode,
-            capabilities=capabilities,
-            client_guid=client_guid,
-            negotiate_contexts=contexts,
+            for idx in range(context_count):
+                ctx, offset = unpack_negotiate_context(view[end_idx:])
+                contexts.append(ctx)
+
+                if idx != context_count - 1:
+                    # Adjust for padding
+                    offset += 8 - (offset % 8 or 8)
+
+                end_idx += offset
+
+        return (
+            NegotiateRequest(
+                dialects=dialects,
+                security_mode=security_mode,
+                capabilities=capabilities,
+                client_guid=client_guid,
+                negotiate_contexts=contexts,
+            ),
+            end_idx,
         )
 
 
@@ -335,8 +355,8 @@ class NegotiateResponse(SMBMessage):
         max_transact_size: int,
         max_read_size: int,
         max_write_size: int,
-        system_time: int,
-        server_start_time: int,
+        system_time: int = 0,
+        server_start_time: int = 0,
         security_buffer: typing.Optional[bytes] = None,
         negotiate_contexts: typing.Optional[typing.List[NegotiateContext]] = None,
     ) -> None:
@@ -367,7 +387,12 @@ class NegotiateResponse(SMBMessage):
 
             last_idx = len(self.negotiate_contexts) - 1
             for idx, context in enumerate(self.negotiate_contexts):
-                negotiate_contexts.append(pack_negotiate_context(context, pad=idx != last_idx))
+                context_data = pack_negotiate_context(context)
+                negotiate_contexts.append(context_data)
+
+                context_padding_size = 8 - (len(context_data) % 8 or 8)
+                if idx != last_idx and context_padding_size:
+                    negotiate_contexts.append(b"\x00" * context_padding_size)
 
         return b"".join(
             [
@@ -396,7 +421,7 @@ class NegotiateResponse(SMBMessage):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "NegotiateResponse":
+    ) -> typing.Tuple["NegotiateResponse", int]:
         view = memoryview(data)[offset:]
 
         security_mode = SecurityModes(struct.unpack("<H", view[2:4])[0])
@@ -412,27 +437,42 @@ class NegotiateResponse(SMBMessage):
         sec_buffer_offset = struct.unpack("<H", view[56:58])[0] - 64
         sec_buffer_length = struct.unpack("<H", view[58:60])[0]
         context_offset = struct.unpack("<I", view[60:64])[0] - 64
-        sec_buffer = bytes(view[sec_buffer_offset : sec_buffer_offset + sec_buffer_length])
 
-        context_view = view[context_offset:]
+        end_idx = 64
+        sec_buffer = None
+        if sec_buffer_length:
+            end_idx = sec_buffer_offset + sec_buffer_length
+            sec_buffer = bytes(view[sec_buffer_offset:end_idx])
+
         contexts: typing.List[NegotiateContext] = []
-        for _ in range(context_count):
-            ctx, context_offset = unpack_negotiate_context(context_view)
-            contexts.append(ctx)
-            context_view = context_view[context_offset:]
+        if context_count:
+            end_idx = context_offset
 
-        return NegotiateResponse(
-            security_mode=security_mode,
-            dialect_revision=dialect_revision,
-            server_guid=server_guid,
-            capabilities=capabilities,
-            max_transact_size=max_transact_size,
-            max_read_size=max_read_size,
-            max_write_size=max_write_size,
-            system_time=system_time,
-            server_start_time=server_start_time,
-            security_buffer=sec_buffer,
-            negotiate_contexts=contexts,
+            for idx in range(context_count):
+                ctx, offset = unpack_negotiate_context(view[end_idx:])
+                contexts.append(ctx)
+
+                if idx != context_count - 1:
+                    # Adjust for padding
+                    offset += 8 - (offset % 8 or 8)
+
+                end_idx += offset
+
+        return (
+            NegotiateResponse(
+                security_mode=security_mode,
+                dialect_revision=dialect_revision,
+                server_guid=server_guid,
+                capabilities=capabilities,
+                max_transact_size=max_transact_size,
+                max_read_size=max_read_size,
+                max_write_size=max_write_size,
+                system_time=system_time,
+                server_start_time=server_start_time,
+                security_buffer=sec_buffer,
+                negotiate_contexts=contexts,
+            ),
+            end_idx,
         )
 
 
@@ -562,6 +602,7 @@ class TreeDisconnectResponse(SMBMessage):
 
 
 MESSAGES: typing.Dict[Command, typing.Tuple[typing.Type[SMBMessage], typing.Type[SMBMessage]]] = {
+    Command.SMB1_NEGOTIATE: (SMB1NegotiateRequest, SMB1NegotiateResponse),
     Command.NEGOTIATE: (NegotiateRequest, NegotiateResponse),
     Command.SESSION_SETUP: (SessionSetupRequest, SessionSetupResponse),
     Command.LOGOFF: (LogoffRequest, LogoffResponse),

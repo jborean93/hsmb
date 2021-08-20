@@ -6,15 +6,26 @@ import uuid
 import hsmb
 
 
-def tcp_write(writer: asyncio.StreamWriter, data: bytearray) -> None:
+def tcp_write(writer: asyncio.StreamWriter, data: bytes) -> None:
     writer.write(len(data).to_bytes(4, byteorder="big"))
     writer.write(data)
 
 
+async def tcp_read(reader: asyncio.StreamReader) -> bytes:
+    data_len = struct.unpack("<I", await reader.read(4))[0]
+    return await reader.read(data_len)
+
+
 async def main() -> None:
     reader, writer = await asyncio.open_connection("127.0.0.1", 445)
-    conn = hsmb.SMBConnection(hsmb.SMBConfiguration(hsmb.SMBRole.CLIENT), uuid.uuid4())
-    salt = os.urandom(32)
+    conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig())
+    conn.negotiate()
+    tcp_write(writer, conn.data_to_send())
+    conn.receive_data(await tcp_read(reader))
+    event = conn.next_event()
+    a = ""
+
+    return
 
     header1 = hsmb.SMB1Header(
         command=0x72,
