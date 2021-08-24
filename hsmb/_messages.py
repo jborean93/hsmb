@@ -62,7 +62,7 @@ class Capabilities(enum.IntFlag):
     MULTI_CHANNEL = 0x00000008
     PERSISTENT_HANDLES = 0x00000010
     DIRECTORY_LEASING = 0x00000020
-    CAP_ENCRYPTION = 0x00000040
+    ENCRYPTION = 0x00000040
 
 
 class SessionSetupFlags(enum.IntFlag):
