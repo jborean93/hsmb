@@ -6,23 +6,32 @@ import uuid
 import hsmb
 
 
-def tcp_write(writer: asyncio.StreamWriter, data: bytes) -> None:
+async def tcp_write(writer: asyncio.StreamWriter, data: bytes) -> None:
     writer.write(len(data).to_bytes(4, byteorder="big"))
     writer.write(data)
+    await writer.drain()
 
 
 async def tcp_read(reader: asyncio.StreamReader) -> bytes:
-    data_len = struct.unpack("<I", await reader.read(4))[0]
+    raw_len = await reader.read(4)
+    data_len = struct.unpack(">I", raw_len)[0]
     return await reader.read(data_len)
 
 
 async def main() -> None:
     reader, writer = await asyncio.open_connection("127.0.0.1", 445)
-    conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig())
-    conn.negotiate()
-    tcp_write(writer, conn.data_to_send())
-    conn.receive_data(await tcp_read(reader))
-    event = conn.next_event()
+    conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), "127.0.0.1")
+    conn.open()
+
+    while True:
+        data = conn.data_to_send()
+        if not data:
+            break
+
+        await tcp_write(writer, data)
+        conn.receive_data(await tcp_read(reader))
+        event = conn.next_event()
+
     a = ""
 
     return

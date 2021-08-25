@@ -3,6 +3,9 @@
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
 import base64
+import dataclasses
+import datetime
+import enum
 import os
 import typing
 import uuid
@@ -56,42 +59,63 @@ from hsmb._negotiate_contexts import (
     TransportCapabilityFlags,
 )
 
-T = typing.TypeVar("T", bound=SMBConfig)
+
+class TransportIdentifier(enum.Enum):
+    UNKNOWN = enum.auto()
+    DIRECT_TCP = enum.auto()
+    NETBIOS_TCP = enum.auto()
+    QUIC = enum.auto()
 
 
-class SMBConnection(typing.Generic[T]):
+@dataclasses.dataclass
+class PendingRequest:
+    message: SMBMessage
+    async_id: int = 0
+    cancel_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
+    timestamp: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+    buffer_descriptor_list: typing.List = dataclasses.field(default_factory=list)
+
+
+class SMBClientConnection:
     def __init__(
         self,
-        config: T,
+        config: SMBClientConfig,
+        server_name: str,
+        transport_identifier: TransportIdentifier = TransportIdentifier.UNKNOWN,
     ) -> None:
         self.config = config
+        self._data_to_send = bytearray()
+        self._receive_buffer = bytearray()
+
+        self.transport_identifier = transport_identifier
 
         self.session_table: typing.Dict = {}
         self.preauth_session_table: typing.Dict = {}
-        self.outstanding_requests: typing.Dict = {}
-        self.sequence_window: typing.Dict = {}
+        self.outstanding_requests: typing.Dict[int, PendingRequest] = {}
+        self.sequence_window: typing.List[typing.Tuple[int, int]] = [(0, 1)]
         self.gss_negotiate_token: typing.Optional[bytes] = None
-        self.max_transact_size = 0
-        self.max_read_size = 0
-        self.max_write_size = 0
+        self.max_transact_size = 65536
+        self.max_read_size = 65536
+        self.max_write_size = 65536
+        self.server_guid = uuid.UUID(int=0)
         self.require_signing = False
-        self.server_name: typing.Optional[str] = None
+        self.server_name = server_name
 
         # SMB 2.1
-        self.dialect: typing.Optional[Dialect] = None
-        self.our_guid: uuid.UUID = uuid.UUID(int=0)
-        self.their_guid: uuid.UUID = uuid.UUID(int=0)
+        self.dialect = Dialect.UNKNOWN
         self.supports_file_leasing = False
         self.supports_multi_credit = False
+        self.client_guid = uuid.UUID(int=0)
 
         # SMB 3.x
-        self.our_capabilities = Capabilities.NONE
-        self.their_capabilities = Capabilities.NONE
-        self.our_security_mode = SecurityModes.NONE
-        self.their_security_mode = SecurityModes.NONE
         self.supports_directory_leasing = False
         self.supports_multi_channel = False
+        self.supports_persistent_handles = False
         self.supports_encryption = False
+        self.client_capabilities = Capabilities.NONE
+        self.server_capabilities = Capabilities.NONE
+        self.client_security_mode = SecurityModes.NONE
+        self.server_security_mode = SecurityModes.NONE
         self.server: typing.Optional[ClientServer] = None
         self.offered_dialects: typing.List[Dialect] = []
 
@@ -105,14 +129,10 @@ class SMBConnection(typing.Generic[T]):
         self.signing_algorithm_id: typing.Optional[SigningAlgorithm] = None
         self.accept_transport_security = False
 
-        self._data_to_send = bytearray()
-        self._receive_buffer = bytearray()
-
     def send(
         self,
         message: SMBMessage,
         channel_sequence: int = 0,
-        status: int = 0,
         credits: int = 0,
         related: bool = False,
         priority: typing.Optional[int] = 0,
@@ -121,16 +141,6 @@ class SMBConnection(typing.Generic[T]):
         final: bool = True,
     ) -> None:
         flags = HeaderFlags.NONE
-
-        if self.config.role == SMBRole.CLIENT:
-            if status:
-                raise ValueError("Client cannot set status")
-
-        else:
-            if channel_sequence:
-                raise ValueError("Server cannot set channel sequence")
-
-            flags |= HeaderFlags.SERVER_TO_REDIR
 
         if related:
             flags |= HeaderFlags.RELATED_OPERATIONS
@@ -148,7 +158,7 @@ class SMBConnection(typing.Generic[T]):
         header = SMB2HeaderSync(
             credit_charge=credit_charge,
             channel_sequence=channel_sequence,
-            status=status,
+            status=0,
             command=message.command,
             credits=credits,
             flags=flags,
@@ -157,74 +167,9 @@ class SMBConnection(typing.Generic[T]):
             tree_id=tree_id,
             session_id=session_id,
             signature=b"\x00" * 16,
-        ).pack()
-
-        self._data_to_send += header
-        self._data_to_send += message.pack()
-
-    def send_async(
-        self,
-        message: SMBMessage,
-        channel_sequence: int = 0,
-        status: int = 0,
-        credits: int = 0,
-        related: bool = False,
-        priority: typing.Optional[int] = 0,
-        session_id: int = 0,
-        async_id: int = 0,
-        final: bool = True,
-    ) -> None:
-        flags = HeaderFlags.ASYNC_COMMAND
-
-        if self.config.role == SMBRole.CLIENT:
-            if status:
-                raise ValueError("Client cannot set status")
-
-        else:
-            if channel_sequence:
-                raise ValueError("Server cannot set channel sequence")
-
-            flags |= HeaderFlags.SERVER_TO_REDIR
-
-        if related:
-            flags |= HeaderFlags.RELATED_OPERATIONS
-
-        if priority is not None:
-            if priority < 0 or priority > 7:
-                raise ValueError("Priority must be between 0 and 7")
-            flags |= priority << 4
-
-        # FIXME
-        credit_charge = 0
-        next_command = 0
-        message_id = 0
-
-        header = SMB2HeaderAsync(
-            credit_charge=credit_charge,
-            channel_sequence=channel_sequence,
-            status=status,
-            command=message.command,
-            credits=credits,
-            flags=flags,
-            next_command=next_command,
-            message_id=message_id,
-            async_id=async_id,
-            session_id=session_id,
-            signature=b"\x00" * 16,
         )
+        self.outstanding_requests[message_id] = PendingRequest(message=message)
 
-        self._data_to_send += header.pack()
-        self._data_to_send += message.pack()
-
-    def send_smb1(
-        self,
-        message: SMBMessage,
-    ) -> None:
-        flags = SMB1HeaderFlags.EAS | SMB1HeaderFlags.NT_STATUS | SMB1HeaderFlags.UNICODE
-        if self.config.role == SMBRole.SERVER:
-            flags |= SMB1HeaderFlags.REPLY
-
-        header = SMB1Header(command=message.command.value, status=0, flags=flags, pid=0, tid=0, uid=0, mid=0)
         self._data_to_send += header.pack()
         self._data_to_send += message.pack()
 
@@ -256,25 +201,24 @@ class SMBConnection(typing.Generic[T]):
         if isinstance(header, TransformHeader):
             raise Exception("FIXME decryption")
 
-        is_reply = False
         command: Command
         if isinstance(header, SMB1Header):
             if header.command != Command.SMB1_NEGOTIATE:
                 raise Exception("Expecting SMB1 NEGOTIATE command")
 
-            is_reply = bool(header.flags & SMB1HeaderFlags.REPLY)
             command = Command(header.command)
             next_command = 0
+            message_id = 0
 
         elif isinstance(header, (SMB2HeaderSync, SMB2HeaderAsync)):
-            is_reply = bool(header.flags & HeaderFlags.SERVER_TO_REDIR)
             command = header.command
             next_command = header.next_command
+            message_id = header.message_id
 
         else:
             raise Exception("Unknown header this shouldn't occur ever")
 
-        message_cls = MESSAGES[command][1 if is_reply else 0]
+        message_cls = MESSAGES[command][1]
         message, message_offset = message_cls.unpack(self._receive_buffer, offset)
 
         if next_command:
@@ -283,28 +227,14 @@ class SMBConnection(typing.Generic[T]):
             # In case the message still contained padded bytes strip off the remaining NULL bytes.
             self._receive_buffer = self._receive_buffer[offset + message_offset :].lstrip(b"\x00")
 
+        request = self.outstanding_requests[message_id]
         process_func = getattr(self, f"_process_{command.name.lower()}", None)
         if process_func:
-            process_func(message)
+            process_func(request, message)
 
-        if is_reply:
-            return ResponseReceived(header, message)
+        return ResponseReceived(header, message)
 
-        else:
-            return RequestReceived(header, message)
-
-
-class SMBClientConnection(SMBConnection[SMBClientConfig]):
-    def __init__(
-        self,
-        config: SMBClientConfig,
-        server_name: typing.Optional[str] = None,
-    ) -> None:
-        super().__init__(config)
-
-        self.server_name = server_name
-
-    def negotiate(
+    def open(
         self,
         offered_dialects: typing.Optional[typing.List[Dialect]] = None,
         as_smb1: bool = False,
@@ -321,8 +251,13 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
             if Dialect.SMB202 in offered_dialects:
                 smb1_dialects.insert(0, "SMB 2.002")
 
-            smb1_negotiate = SMB1NegotiateRequest(dialects=smb1_dialects)
-            self.send_smb1(smb1_negotiate)
+            negotiate = SMB1NegotiateRequest(dialects=smb1_dialects)
+
+            flags = SMB1HeaderFlags.EAS | SMB1HeaderFlags.NT_STATUS | SMB1HeaderFlags.UNICODE
+            header = SMB1Header(command=negotiate.command.value, status=0, flags=flags, pid=0, tid=0, uid=0, mid=0)
+            self._data_to_send += header.pack()
+            self._data_to_send += negotiate.pack()
+
             return
 
         self.our_security_mode = (
@@ -337,25 +272,28 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
 
         contexts: typing.List[NegotiateContext] = []
         if highest_dialect >= Dialect.SMB311:
+            if not self.config.registered_hash_algorithms:
+                raise Exception("No registered hash algorithms available")
+
             contexts.append(
                 PreauthIntegrityCapabilities(
-                    hash_algorithms=[HashAlgorithm.SHA512],
+                    hash_algorithms=[h.algorithm_id() for h in self.config.registered_hash_algorithms],
                     salt=os.urandom(32),
                 )
             )
 
-            if self.config.is_encryption_supported:
+            if self.config.is_encryption_supported and self.config.registered_ciphers:
                 contexts.append(
                     EncryptionCapabilities(
-                        ciphers=[Cipher.AES256_GCM, Cipher.AES256_CCM, Cipher.AES128_GCM, Cipher.AES128_CCM],
+                        ciphers=[c.cipher_id() for c in self.config.registered_ciphers],
                     )
                 )
 
-            if self.config.is_compression_supported:
+            if self.config.is_compression_supported and self.config.registered_compressors:
                 contexts.append(
                     CompressionCapabilities(
                         flags=CompressionCapabilityFlags.NONE,
-                        compression_algorithms=[CompressionAlgorithm.LZ77_HUFFMAN],
+                        compression_algorithms=[c.compression_id() for c in self.config.registered_compressors],
                     )
                 )
 
@@ -366,30 +304,37 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
             if self.server_name:
                 contexts.append(NetnameNegotiate(net_name=self.server_name))
 
-            contexts.append(
-                SigningCapabilities(
-                    signing_algorithms=[
-                        SigningAlgorithm.AES_GMAC,
-                        SigningAlgorithm.AES_CMAC,
-                        SigningAlgorithm.HMAC_SHA256,
-                    ]
+            if self.config.registered_signing_algorithms:
+                contexts.append(
+                    SigningCapabilities(
+                        signing_algorithms=[s.signing_id() for s in self.config.registered_signing_algorithms]
+                    )
                 )
-            )
 
-            # FIXME: Do if underlying transport is QUIC
-            if False and not self.config.disable_encryption_over_secure_transport:
+            if (
+                self.transport_identifier == TransportIdentifier.QUIC
+                and not self.config.disable_encryption_over_secure_transport
+            ):
                 contexts.append(TransportCapabilities(flags=TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY))
 
-        negotiate = NegotiateRequest(
-            dialects=self.offered_dialects,
-            security_mode=self.our_security_mode,
-            capabilities=self.our_capabilities,
-            client_guid=self.our_identifier,
-            negotiate_contexts=contexts,
+        self.send(
+            NegotiateRequest(
+                dialects=self.offered_dialects,
+                security_mode=self.our_security_mode,
+                capabilities=self.our_capabilities,
+                client_guid=self.our_identifier,
+                negotiate_contexts=contexts,
+            )
         )
-        self.send(negotiate)
 
-    def _process_negotiate(self, message: NegotiateResponse) -> None:
+    def close(self) -> None:
+        pass
+
+    def _process_negotiate(
+        self,
+        request: PendingRequest,
+        message: NegotiateResponse,
+    ) -> None:
         self.max_transact_size = message.max_transact_size
         self.max_read_size = message.max_read_size
         self.max_write_size = message.max_write_size
@@ -398,7 +343,7 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
         self.require_signing = bool(message.security_mode & SecurityModes.SIGNING_REQUIRED)
 
         if message.dialect_revision == Dialect.SMB2_WILDCARD:
-            self.negotiate(self.offered_dialects, as_smb1=False)
+            self.open(self.offered_dialects, as_smb1=False)
             return
 
         if message.dialect_revision not in self.offered_dialects:
@@ -450,12 +395,13 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
                 elif isinstance(context, EncryptionCapabilities):
                     if len(context.ciphers) != 1:
                         raise Exception(f"Found {len(context.ciphers)} ciphers, expecting 1")
-                    # TODO: Verify cipher is not 0 and is in the original request
-                    self.supports_encryption = True
-                    self.cipher_id = context.ciphers[0]
+                    # TODO: Verify cipher is in the original request
+                    if context.ciphers[0] != 0:
+                        self.supports_encryption = True
+                        self.cipher_id = context.ciphers[0]
 
-                    if self.server:
-                        self.server.cipher_id = context.ciphers[0]
+                        if self.server:
+                            self.server.cipher_id = context.ciphers[0]
 
             if ContextType.PREAUTH_INTEGRITY_CAPABILITIES not in found_contexts:
                 raise Exception("Was expecting at least 1 preauth int cap")
@@ -464,11 +410,9 @@ class SMBClientConnection(SMBConnection[SMBClientConfig]):
             self.preauth_integrity_hash_value += b""
 
 
-class SMBServerConnection(SMBConnection[SMBServerConfig]):
-    pass
-
-
 """
+class SMBServerConnection(SMBConnection[SMBServerConfig]):
+
     def __init__(
         self,
         config: SMBServerConfig,

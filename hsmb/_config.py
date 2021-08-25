@@ -9,7 +9,19 @@ import typing
 import uuid
 
 from hsmb._messages import Capabilities, Dialect, SecurityModes
-from hsmb._negotiate_contexts import Cipher, RdmaTransformId, SigningAlgorithm
+from hsmb._negotiate_contexts import (
+    DEFAULT_CIPHERS,
+    DEFAULT_COMPRESSORS,
+    DEFAULT_HASHERS,
+    DEFAULT_SIGNERS,
+    Cipher,
+    CipherBase,
+    CompressorBase,
+    HashAlgorithmBase,
+    RdmaTransformId,
+    SignerBase,
+    SigningAlgorithm,
+)
 
 if typing.TYPE_CHECKING:
     from hsmb.connection import SMBClientConnection
@@ -96,7 +108,9 @@ class SMBConfig:
     Global data that is required by both the client and server. This should not
     be created directly, instead use :class:`SMBClientConfig` or
     :class:`SMBServerConfig` for a client and server configuration object
-    respectively. These fields are defined in `MS-SMB2 3.1.1.1 Global`_.
+    respectively. These fields are defined in `MS-SMB2 3.1.1.1 Global`_. The
+    registered_* fields are set to a known set of values implemented in hsmb
+    but can be overriden by specifying a list when creating the config.
 
     Attributes:
         roles: The role of the caller.
@@ -113,6 +127,17 @@ class SMBConfig:
         is_rdma_transform_supported: Indicates that RDMA transform is supported.
         disable_encryption_over_secure_transport: Indicates encryption is
             disabled over a secure transport like QUIC.
+        registered_hash_algorithms: A list of :class:`HashAlgorithmBase`
+            classes that can be used to hash the pre authentication value. At
+            least 1 hash algorithm must be present in the config to negotiate
+            SMB 3.1.1.
+        registered_ciphers: A list of :class:`CipherBase`, in priority order,
+            to negotiate for the encryption capabilities with the peer.
+        registered_compressor: A list of :class:`CompressorBase`, in priority
+            order, to negotiate for the compression capabilities with the peer.
+        registered_signing_algorithms: A list of :class:`SignerBase`, in
+            priority order, to negotiate for the signing capabilities with the
+            peer.
 
     .. _MS-SMB2 3.1.1.1 Global:
         https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/95a74d96-93a7-42ea-af1a-688c17c522ee
@@ -126,6 +151,24 @@ class SMBConfig:
     is_chained_compression_supported: bool = True
     is_rdma_transform_supported: bool = True
     disable_encryption_over_secure_transport: bool = True
+
+    registered_hash_algorithms: typing.Optional[typing.List[typing.Type[HashAlgorithmBase]]] = None
+    registered_ciphers: typing.Optional[typing.List[typing.Type[CipherBase]]] = None
+    registered_compressors: typing.Optional[typing.List[typing.Type[CompressorBase]]] = None
+    registered_signing_algorithms: typing.Optional[typing.List[typing.Type[SignerBase]]] = None
+
+    def __post_init__(self) -> None:
+        if self.registered_hash_algorithms is None:
+            self.registered_hash_algorithms = DEFAULT_HASHERS
+
+        if self.registered_ciphers is None:
+            self.registered_ciphers = DEFAULT_CIPHERS
+
+        if self.registered_compressors is None:
+            self.registered_compressors = DEFAULT_COMPRESSORS
+
+        if self.registered_signing_algorithms is None:
+            self.registered_signing_algorithms = DEFAULT_SIGNERS
 
 
 @dataclasses.dataclass
@@ -164,15 +207,40 @@ class SMBClientConfig(SMBConfig):
 
 @dataclasses.dataclass
 class SMBServerConfig(SMBConfig):
+    """Global SMB server configuration.
+
+    Global data that is required by the server. These fields are defined in
+    `MS-SMB2 3.3.1.5 Global`_.
+
+    Attributes:
+
+    .. _MS-SMB2 3.3.1.5 Global:
+        https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b3803e3b-e849-4827-a558-b2403deb24d9
+    """
+
     role = SMBRole.SERVER
 
-    server_guid: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-
+    # server_statistics
+    # server_enabled
     share_list: typing.List[ServerShare] = dataclasses.field(default_factory=list)
-    start_time: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
-    dfs_capable: bool = False
+    global_open_table: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    global_session_table: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    connection_list: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    server_guid: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
+    server_start_time: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+    is_dfs_capable: bool = False
+    # server_side_copy_max_number_of_chunks: int = 0
+    # server_side_copy_max_data_size: int = 0
+    # server_hash_level: ServerHashLevel = something
+    global_lease_table_list: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    # max_resiliency_timeout: int = 0
+    # resilient_open_scavenger_expiry_time: int = 0
+    global_client_table: typing.Dict[uuid.UUID, typing.Any] = dataclasses.field(default_factory=dict)
     encrypt_data: bool = False
     reject_unencrypted_access: bool = False
     is_multi_channel_capable: bool = False
     allow_anonymous_access: bool = False
-    allow_named_pipe_over_quic: bool = False
+    is_shared_vhd_supported: bool = False
+    max_cluster_dialect: Dialect = Dialect.SMB311
+    supports_tree_connect_extn: bool = False
+    allow_named_pipe_access_over_quic: bool = False
