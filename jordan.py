@@ -3,6 +3,8 @@ import os
 import struct
 import uuid
 
+import spnego
+
 import hsmb
 
 
@@ -32,56 +34,29 @@ async def main() -> None:
         conn.receive_data(await tcp_read(reader))
         event = conn.next_event()
 
-    a = ""
+    auth = spnego.client("smbuser", "smbpassword")
+    token = auth.step(conn.gss_negotiate_token)
+    session = hsmb.SMBClientSession(conn)
 
-    return
+    while True:
+        session.open(token)
+        data = conn.data_to_send()
+        if not data:
+            break
 
-    header1 = hsmb.SMB1Header(
-        command=0x72,
-        status=0,
-        flags=hsmb.SMB1HeaderFlags.NONE,
-        pid=0,
-        tid=0,
-        uid=0,
-        mid=0,
-    )
-    nego1 = hsmb.SMB1NegotiateRequest(dialects=["NT LM 0.12", "SMB 2.002", "SMB 2.???"])
-    multi_nego = bytearray(header1.pack() + nego1.pack())
-    tcp_write(writer, multi_nego)
-    data_len = await reader.read(4)
-    resp = await reader.read(struct.unpack(">I", data_len)[0])
-    resp_header, resp_header_length = hsmb.unpack_header(resp)
-    if isinstance(resp_header, hsmb.SMB1Header):
-        nego_resp = hsmb.SMB1NegotiateResponse.unpack(resp, resp_header_length)
-    else:
-        nego_resp = hsmb.NegotiateResponse.unpack(resp, resp_header_length)
+        await tcp_write(writer, data)
+        conn.receive_data(await tcp_read(reader))
+        event = conn.next_event()
 
-    nego = hsmb.NegotiateRequest(
-        dialects=[
-            hsmb.Dialect.SMB311,
-        ],
-        security_mode=hsmb.SecurityModes.SIGNING_REQUIRED,
-        capabilities=hsmb.Capabilities.CAP_ENCRYPTION | hsmb.Capabilities.LARGE_MTU,
-        client_guid=conn.identifier,
-        negotiate_contexts=[
-            hsmb.PreauthIntegrityCapabilities(
-                hash_algorithms=[hsmb.HashAlgorithm.SHA512],
-                salt=salt,
-            ),
-            hsmb.EncryptionCapabilities(
-                ciphers=[hsmb.Cipher.AES128_CCM, hsmb.Cipher.AES128_GCM],
-            ),
-        ],
-    )
-    conn.send(nego)
+        if event.header.status == 0:
+            break
 
-    tcp_write(writer, conn._data_to_send)
-    data_len = await reader.read(4)
-    resp = await reader.read(struct.unpack(">I", data_len)[0])
-    resp_header, resp_header_length = hsmb.unpack_header(resp)
-    nego_resp = hsmb.NegotiateResponse.unpack(resp, resp_header_length)
-    a = hsmb.NegotiateRequest.unpack(nego.pack())
-    nego_resp.pack()
+        elif event.header.status != 0xC0000016:
+            raise Exception(f"Received unknown status {event.header.status}")
+
+        else:
+            session.session_id = event.header.session_id
+            token = event.message.security_buffer
 
     a = ""
 

@@ -135,7 +135,7 @@ class SMBClientConnection:
         channel_sequence: int = 0,
         credits: int = 0,
         related: bool = False,
-        priority: typing.Optional[int] = 0,
+        priority: typing.Optional[int] = None,
         session_id: int = 0,
         tree_id: int = 0,
         final: bool = True,
@@ -150,17 +150,64 @@ class SMBClientConnection:
                 raise ValueError("Priority must be between 0 and 7")
             flags |= priority << 4
 
-        # FIXME
-        credit_charge = 0
         next_command = 0
-        message_id = 0
+
+        credit_charge: int
+        message_id: int
+        if message.command == Command.CANCEL:
+            # FIXME: This should be the id of the request being cancelled
+            message_id = 0
+            credit_charge = 0
+
+        else:
+            if self.supports_multi_credit:
+                if message.command == Command.READ:
+                    payload_size = 1
+
+                elif message.command == Command.WRITE:
+                    payload_size = 1
+
+                elif message.command == Command.IOCTL:
+                    payload_size = 1
+
+                elif message.command == Command.QUERY_DIRECTORY:
+                    payload_size = 1
+
+                else:
+                    payload_size = 1
+
+                credit_charge = (max(0, payload_size - 1) // 65536) + 1
+
+            else:
+                credit_charge = 0
+
+            sequence_charge = max(1, credit_charge)
+            for idx, window in enumerate(self.sequence_window):
+                seq_id, num_creds = window
+
+                if sequence_charge <= num_creds:
+                    message_id = seq_id
+                    credits_remaining = num_creds - sequence_charge
+                    if credits_remaining:
+                        self.sequence_window[idx] = (seq_id + sequence_charge, credits_remaining)
+                    else:
+                        del self.sequence_window[idx]
+
+                    if not self.sequence_window:
+                        # Used to trace the current high sequence window number for the response recharge
+                        self.sequence_window.append((seq_id + sequence_charge, 0))
+
+                    break
+
+            else:
+                raise Exception("Out of credits")
 
         header = SMB2HeaderSync(
             credit_charge=credit_charge,
             channel_sequence=channel_sequence,
             status=0,
             command=message.command,
-            credits=credits,
+            credits=max(credits, credit_charge),
             flags=flags,
             next_command=next_command,
             message_id=message_id,
@@ -169,9 +216,10 @@ class SMBClientConnection:
             signature=b"\x00" * 16,
         )
         self.outstanding_requests[message_id] = PendingRequest(message=message)
+        header_data = header.pack()
 
-        self._data_to_send += header.pack()
-        self._data_to_send += message.pack()
+        self._data_to_send += header_data
+        self._data_to_send += message.pack(len(header_data))
 
     def data_to_send(
         self,
@@ -209,17 +257,23 @@ class SMBClientConnection:
             command = Command(header.command)
             next_command = 0
             message_id = 0
+            granted_credits = 1
+
+            self.sequence_window.append((1, 1))
 
         elif isinstance(header, (SMB2HeaderSync, SMB2HeaderAsync)):
             command = header.command
             next_command = header.next_command
             message_id = header.message_id
+            granted_credits = header.credits
 
         else:
             raise Exception("Unknown header this shouldn't occur ever")
 
+        self.sequence_window[-1] = (self.sequence_window[-1][0], self.sequence_window[-1][1] + granted_credits)
+
         message_cls = MESSAGES[command][1]
-        message, message_offset = message_cls.unpack(self._receive_buffer, offset)
+        message, message_offset = message_cls.unpack(self._receive_buffer, offset, offset)
 
         if next_command:
             self._receive_buffer = self._receive_buffer[next_command:]
@@ -256,7 +310,7 @@ class SMBClientConnection:
             flags = SMB1HeaderFlags.EAS | SMB1HeaderFlags.NT_STATUS | SMB1HeaderFlags.UNICODE
             header = SMB1Header(command=negotiate.command.value, status=0, flags=flags, pid=0, tid=0, uid=0, mid=0)
             self._data_to_send += header.pack()
-            self._data_to_send += negotiate.pack()
+            self._data_to_send += negotiate.pack(32)
 
             return
 

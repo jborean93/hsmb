@@ -24,7 +24,7 @@ from hsmb._negotiate_contexts import (
 )
 
 if typing.TYPE_CHECKING:
-    from hsmb.connection import SMBClientConnection
+    from hsmb._connection import SMBClientConnection
 
 
 class SMBRole(enum.Enum):

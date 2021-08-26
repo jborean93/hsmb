@@ -66,6 +66,7 @@ class Capabilities(enum.IntFlag):
 
 
 class SessionSetupFlags(enum.IntFlag):
+    NONE = 0x0
     BINDING = 0x01
 
 
@@ -121,13 +122,17 @@ class SMBMessage:
 
     command: Command
 
-    def pack(self) -> bytes:
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
         raise NotImplementedError()
 
     @classmethod
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
         offset: int = 0,
     ) -> typing.Tuple["SMBMessage", int]:
         raise NotImplementedError()
@@ -147,7 +152,10 @@ class SMB1NegotiateRequest(SMBMessage):
         super().__init__(Command.SMB1_NEGOTIATE)
         object.__setattr__(self, "dialects", dialects)
 
-    def pack(self) -> bytes:
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
         dialects = b"".join([b"\x02" + d.encode() + b"\x00" for d in self.dialects])
 
         return b"".join(
@@ -162,6 +170,7 @@ class SMB1NegotiateRequest(SMBMessage):
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
         offset: int = 0,
     ) -> typing.Tuple["SMB1NegotiateRequest", int]:
         # FIXME
@@ -184,7 +193,10 @@ class SMB1NegotiateResponse(SMBMessage):
         super().__init__(Command.SMB1_NEGOTIATE)
         object.__setattr__(self, "selected_index", selected_index)
 
-    def pack(self) -> bytes:
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
         return b"".join(
             [
                 b"\x01",  # WordCount
@@ -197,9 +209,9 @@ class SMB1NegotiateResponse(SMBMessage):
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
         offset: int = 0,
     ) -> typing.Tuple["SMB1NegotiateResponse", int]:
-        # FIXME
         view = memoryview(data)[offset:]
 
         selected_index = struct.unpack("<h", view[1:3])[0]
@@ -232,15 +244,17 @@ class NegotiateRequest(SMBMessage):
         object.__setattr__(self, "client_guid", client_guid)
         object.__setattr__(self, "negotiate_contexts", negotiate_contexts or [])
 
-    def pack(self) -> bytes:
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
         dialects = b"".join(d.to_bytes(2, byteorder="little") for d in self.dialects)
         negotiate_offset = 0
         padding_size = 0
         negotiate_contexts = []
 
         if self.negotiate_contexts:
-            # 100 == header + negotiate structure size
-            negotiate_offset = 100 + len(dialects)
+            negotiate_offset = offset_from_header + 36 + len(dialects)
             padding_size = 8 - (negotiate_offset % 8 or 8)
             negotiate_offset += padding_size
 
@@ -274,6 +288,7 @@ class NegotiateRequest(SMBMessage):
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
         offset: int = 0,
     ) -> typing.Tuple["NegotiateRequest", int]:
         view = memoryview(data)[offset:]
@@ -282,7 +297,7 @@ class NegotiateRequest(SMBMessage):
         security_mode = SecurityModes(struct.unpack("<H", view[4:6])[0])
         capabilities = Capabilities(struct.unpack("<I", view[8:12])[0])
         client_guid = uuid.UUID(bytes_le=bytes(view[12:28]))
-        context_offset = struct.unpack("<I", view[28:32])[0] - 64
+        context_offset = struct.unpack("<I", view[28:32])[0] - offset_from_header
         context_count = struct.unpack("<H", view[32:34])[0]
 
         end_idx = 36
@@ -373,9 +388,12 @@ class NegotiateResponse(SMBMessage):
         object.__setattr__(self, "security_buffer", security_buffer)
         object.__setattr__(self, "negotiate_contexts", negotiate_contexts or [])
 
-    def pack(self) -> bytes:
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
         sec_buffer = self.security_buffer or b""
-        sec_buffer_offset = 129  # header + negotiate structure size
+        sec_buffer_offset = offset_from_header + 65
         negotiate_offset = 0
         padding_size = 0
         negotiate_contexts = []
@@ -396,7 +414,7 @@ class NegotiateResponse(SMBMessage):
 
         return b"".join(
             [
-                b"\x41\x00",  # StructureSize(64)
+                b"\x41\x00",  # StructureSize(65)
                 self.security_mode.value.to_bytes(2, byteorder="little"),
                 self.dialect_revision.value.to_bytes(2, byteorder="little"),
                 len(self.negotiate_contexts).to_bytes(2, byteorder="little"),
@@ -420,6 +438,7 @@ class NegotiateResponse(SMBMessage):
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
         offset: int = 0,
     ) -> typing.Tuple["NegotiateResponse", int]:
         view = memoryview(data)[offset:]
@@ -434,9 +453,9 @@ class NegotiateResponse(SMBMessage):
         max_write_size = struct.unpack("<I", view[36:40])[0]
         system_time = struct.unpack("<Q", view[40:48])[0]
         server_start_time = struct.unpack("<Q", view[48:56])[0]
-        sec_buffer_offset = struct.unpack("<H", view[56:58])[0] - 64
+        sec_buffer_offset = struct.unpack("<H", view[56:58])[0] - offset_from_header
         sec_buffer_length = struct.unpack("<H", view[58:60])[0]
-        context_offset = struct.unpack("<I", view[60:64])[0] - 64
+        context_offset = struct.unpack("<I", view[60:64])[0] - offset_from_header
 
         end_idx = 64
         sec_buffer = None
@@ -478,11 +497,12 @@ class NegotiateResponse(SMBMessage):
 
 @dataclasses.dataclass(frozen=True)
 class SessionSetupRequest(SMBMessage):
-    __slots__ = ("flags", "security_mode", "capabilities", "previous_session_id", "security_buffer")
+    __slots__ = ("flags", "security_mode", "capabilities", "channel", "previous_session_id", "security_buffer")
 
     flags: SessionSetupFlags
     security_mode: SecurityModes
     capabilities: Capabilities
+    channel: int
     previous_session_id: int
     security_buffer: bytes
 
@@ -492,6 +512,7 @@ class SessionSetupRequest(SMBMessage):
         flags: SessionSetupFlags,
         security_mode: SecurityModes,
         capabilities: Capabilities,
+        channel: int,
         previous_session_id: int,
         security_buffer: bytes,
     ) -> None:
@@ -499,8 +520,57 @@ class SessionSetupRequest(SMBMessage):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "security_mode", security_mode)
         object.__setattr__(self, "capabilities", capabilities)
+        object.__setattr__(self, "channel", channel)
         object.__setattr__(self, "previous_session_id", previous_session_id)
         object.__setattr__(self, "security_buffer", security_buffer)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"".join(
+            [
+                b"\x19\x00",  # StructureSize(25)
+                self.flags.value.to_bytes(1, byteorder="little"),
+                self.security_mode.value.to_bytes(1, byteorder="little"),
+                self.capabilities.value.to_bytes(4, byteorder="little"),
+                self.channel.to_bytes(4, byteorder="little"),
+                (offset_from_header + 24).to_bytes(2, byteorder="little"),
+                len(self.security_buffer).to_bytes(2, byteorder="little"),
+                self.previous_session_id.to_bytes(8, byteorder="little"),
+                self.security_buffer,
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["SessionSetupRequest", int]:
+        view = memoryview(data)[offset:]
+
+        flags = SessionSetupFlags(struct.unpack("<B", view[2:3])[0])
+        security_mode = SecurityModes(struct.unpack("<B", view[3:4])[0])
+        capabilities = Capabilities(struct.unpack("<I", view[4:8])[0])
+        channel = struct.unpack("<I", view[8:12])[0]
+        sec_offset = struct.unpack("<H", view[12:14])[0] - offset_from_header
+        sec_length = struct.unpack("<H", view[14:16])[0]
+        previous_session_id = struct.unpack("<Q", view[16:24])[0]
+        buffer = bytes(view[sec_offset : sec_offset + sec_length])
+
+        return (
+            SessionSetupRequest(
+                flags=flags,
+                security_mode=security_mode,
+                capabilities=capabilities,
+                channel=channel,
+                previous_session_id=previous_session_id,
+                security_buffer=buffer,
+            ),
+            sec_offset + sec_length,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -520,6 +590,36 @@ class SessionSetupResponse(SMBMessage):
         object.__setattr__(self, "session_flags", session_flags)
         object.__setattr__(self, "security_buffer", security_buffer)
 
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"".join(
+            [
+                b"\x09\x00",  # StructureSize(9)
+                self.session_flags.value.to_bytes(2, byteorder="little"),
+                (offset_from_header + 8).to_bytes(2, byteorder="little"),
+                len(self.security_buffer).to_bytes(2, byteorder="little"),
+                self.security_buffer,
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["SessionSetupResponse", int]:
+        view = memoryview(data)[offset:]
+
+        session_flags = SessionFlags(struct.unpack("<H", view[2:4])[0])
+        sec_offset = struct.unpack("<H", view[4:6])[0] - offset_from_header
+        sec_length = struct.unpack("<H", view[6:8])[0]
+        buffer = bytes(view[sec_offset : sec_offset + sec_length])
+
+        return SessionSetupResponse(session_flags=session_flags, security_buffer=buffer), sec_offset + sec_length
+
 
 @dataclasses.dataclass(frozen=True)
 class LogoffRequest(SMBMessage):
@@ -530,6 +630,25 @@ class LogoffRequest(SMBMessage):
     ) -> None:
         super().__init__(Command.LOGOFF)
 
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"\x04\x00\x00\x00"
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["LogoffRequest", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise ValueError("Not enough data to unpack LogoffRequest")
+
+        return LogoffRequest(), 4
+
 
 @dataclasses.dataclass(frozen=True)
 class LogoffResponse(SMBMessage):
@@ -539,6 +658,25 @@ class LogoffResponse(SMBMessage):
         self,
     ) -> None:
         super().__init__(Command.LOGOFF)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"\x04\x00\x00\x00"
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["LogoffResponse", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise ValueError("Not enough data to unpack LogoffResponse")
+
+        return LogoffResponse(), 4
 
 
 @dataclasses.dataclass(frozen=True)
@@ -590,6 +728,25 @@ class TreeDisconnectRequest(SMBMessage):
     ) -> None:
         super().__init__(Command.TREE_DISCONNECT)
 
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"\x04\x00\x00\x00"
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["TreeDisconnectRequest", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise ValueError("Not enough data to unpack TreeDisconnectRequest")
+
+        return TreeDisconnectRequest(), 4
+
 
 @dataclasses.dataclass(frozen=True)
 class TreeDisconnectResponse(SMBMessage):
@@ -599,6 +756,25 @@ class TreeDisconnectResponse(SMBMessage):
         self,
     ) -> None:
         super().__init__(Command.TREE_DISCONNECT)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytes:
+        return b"\x04\x00\x00\x00"
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["TreeDisconnectResponse", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise ValueError("Not enough data to unpack TreeDisconnectResponse")
+
+        return TreeDisconnectResponse(), 4
 
 
 MESSAGES: typing.Dict[Command, typing.Tuple[typing.Type[SMBMessage], typing.Type[SMBMessage]]] = {
