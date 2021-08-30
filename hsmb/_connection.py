@@ -152,7 +152,7 @@ class SMBClientConnection:
         tree_id: int = 0,
         final: bool = True,
         callback: ResponseCallback = None,
-    ) -> bytes:
+    ) -> None:
         flags = HeaderFlags.NONE
 
         if related:
@@ -253,7 +253,7 @@ class SMBClientConnection:
 
             memoryview(raw_data)[48:64] = signature
 
-        return bytes(raw_data)
+        self._data_to_send += raw_data
 
     def data_to_send(
         self,
@@ -428,10 +428,8 @@ class SMBClientConnection:
             client_guid=self.client_identifier,
             negotiate_contexts=contexts,
         )
-        data = self.create_header(msg, callback=self._process_negotiate)
-
-        self.preauth_integrity_hash_value = data
-        self._data_to_send += data
+        self.create_header(msg, callback=self._process_negotiate)
+        self.preauth_integrity_hash_value = bytes(self._data_to_send)
 
     def close(self) -> None:
         pass

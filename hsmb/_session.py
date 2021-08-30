@@ -25,6 +25,7 @@ from hsmb._messages import (
     SessionSetupRequest,
     SessionSetupResponse,
 )
+from hsmb._negotiate_contexts import Cipher
 
 
 def smb3kdf(
@@ -109,13 +110,15 @@ class SMBClientSession:
             previous_session_id=0,
             security_buffer=security_buffer,
         )
-        data = self.connection.create_header(req, session_id=self.session_id, callback=self._process_session_setup)
+
+        data_offset = len(self.connection._data_to_send)
+        self.connection.create_header(req, session_id=self.session_id, callback=self._process_session_setup)
+        send_data = bytes(self.connection._data_to_send[data_offset:])
 
         if self.connection.preauth_integrity_hash_id:
             self.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
-                self.preauth_integrity_hash_value + data
+                self.preauth_integrity_hash_value + send_data
             )
-        self.connection._data_to_send += data
 
     def set_session_key(
         self,
@@ -138,8 +141,16 @@ class SMBClientSession:
         if self.connection.dialect >= Dialect.SMB311:
             self.signing_key = smb3kdf(self.session_key, b"SMBSigningKey\x00", self.preauth_integrity_hash_value)
             self.application_key = smb3kdf(self.session_key, b"SMBAppKey\x00", self.preauth_integrity_hash_value)
-            self.encryption_key = smb3kdf(self.session_key, b"SMBC2SCipherKey\x00", self.preauth_integrity_hash_value)
-            self.decryption_key = smb3kdf(self.session_key, b"SMBS2CCipherKey\x00", self.preauth_integrity_hash_value)
+
+            key = self.session_key
+            if self.connection.cipher_id and self.connection.cipher_id.cipher_id() in [
+                Cipher.AES256_CCM,
+                Cipher.AES256_GCM,
+            ]:
+                key = self.full_session_key
+
+            self.encryption_key = smb3kdf(key, b"SMBC2SCipherKey\x00", self.preauth_integrity_hash_value)
+            self.decryption_key = smb3kdf(key, b"SMBS2CCipherKey\x00", self.preauth_integrity_hash_value)
 
         elif self.connection.dialect >= Dialect.SMB300:
             self.signing_key = smb3kdf(self.session_key, b"SMB2AESCMAC\x00", b"SmbSign\x00")
@@ -152,6 +163,9 @@ class SMBClientSession:
             self.application_key = self.session_key
 
         self.signing_required = self.connection.config.require_message_signing or self.connection.require_signing
+        if message.session_flags & SessionFlags.ENCRYPT_DATA:
+            self.signing_required = False
+            self.encrypt_data = True
 
         if self.signing_required:
             if message.session_flags & SessionFlags.IS_GUEST:
@@ -201,5 +215,4 @@ class SMBClientSession:
         return None
 
     def close(self) -> None:
-        data = self.connection.create_header(LogoffRequest(), session_id=self.session_id)
-        self.connection._data_to_send += data
+        self.connection.create_header(LogoffRequest(), session_id=self.session_id)
