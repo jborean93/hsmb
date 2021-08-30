@@ -29,3 +29,15 @@ class ResponseReceived(Event):
     ) -> None:
         self.header = header
         self.message = message
+
+
+class SecurityTokenReceived(Event):
+    def __init__(
+        self,
+        session_id: int,
+        token: bytes,
+        require_session_key: bool,
+    ) -> None:
+        self.session_id = session_id
+        self.token = token
+        self.require_session_key = require_session_key

@@ -9,15 +9,13 @@ import hashlib
 import struct
 import typing
 
-try:
-    import cryptography
-except ImportError:
-    cryptography = False
+import cryptography
 
+HAS_XCA = True
 try:
     import xca
 except ImportError:
-    xca = None
+    HAS_XCA = False
 
 
 class ContextType(enum.IntEnum):
@@ -477,24 +475,22 @@ class CipherBase(metaclass=abc.ABCMeta):
         ...
 
 
-DEFAULT_CIPHERS: typing.List[typing.Type[CipherBase]] = []
-if cryptography:
+class AES128CCMCipher(CipherBase):
+    @classmethod
+    def cipher_id(cls) -> Cipher:
+        return Cipher.AES128_CCM
 
-    class AES128CCMCipher(CipherBase):
-        @classmethod
-        def cipher_id(cls) -> Cipher:
-            return Cipher.AES128_CCM
+    def encrypt(self) -> bytes:
+        return b""
 
-        def encrypt(self) -> bytes:
-            return b""
-
-        def decrypt(self) -> bytes:
-            return b""
-
-    DEFAULT_CIPHERS = [AES128CCMCipher]
+    def decrypt(self) -> bytes:
+        return b""
 
 
-class CompressorBase(metaclass=abc.ABCMeta):
+DEFAULT_CIPHERS: typing.List[typing.Type[CipherBase]] = [AES128CCMCipher]
+
+
+class CompressionAlgorithmBase(metaclass=abc.ABCMeta):
     @classmethod
     @abc.abstractmethod
     def compression_id(cls) -> CompressionAlgorithm:
@@ -509,10 +505,10 @@ class CompressorBase(metaclass=abc.ABCMeta):
         ...
 
 
-DEFAULT_COMPRESSORS: typing.List[typing.Type[CompressorBase]] = []
-if xca:
+DEFAULT_COMPRESSORS: typing.List[typing.Type[CompressionAlgorithmBase]] = []
+if HAS_XCA:
 
-    class LZ77HuffmanCompressor(CompressorBase):
+    class LZ77HuffmanCompressor(CompressionAlgorithmBase):
         @classmethod
         def compression_id(cls) -> CompressionAlgorithm:
             return CompressionAlgorithm.LZ77_HUFFMAN
@@ -526,7 +522,7 @@ if xca:
     DEFAULT_COMPRESSORS = [LZ77HuffmanCompressor]
 
 
-class SignerBase(metaclass=abc.ABCMeta):
+class SigningAlgorithmBase(metaclass=abc.ABCMeta):
     @classmethod
     @abc.abstractmethod
     def signing_id(cls) -> SigningAlgorithm:
@@ -537,4 +533,4 @@ class SignerBase(metaclass=abc.ABCMeta):
         ...
 
 
-DEFAULT_SIGNERS: typing.List[typing.Type[SignerBase]] = []
+DEFAULT_SIGNERS: typing.List[typing.Type[SigningAlgorithmBase]] = []

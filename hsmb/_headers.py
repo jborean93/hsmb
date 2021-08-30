@@ -163,7 +163,7 @@ class SMB1Header(SMBHeader):
 
 
 @dataclasses.dataclass(frozen=True)
-class SMB2HeaderAsync(SMBHeader):
+class SMB2Header(SMBHeader):
     __slots__ = (
         "credit_charge",
         "channel_sequence",
@@ -174,121 +174,6 @@ class SMB2HeaderAsync(SMBHeader):
         "next_command",
         "message_id",
         "async_id",
-        "session_id",
-        "signature",
-    )
-
-    credit_charge: int
-    channel_sequence: int
-    status: int
-    command: Command
-    credits: int
-    flags: HeaderFlags
-    next_command: int
-    message_id: int
-    async_id: int
-    session_id: int
-    signature: bytes
-
-    def __init__(
-        self,
-        *,
-        credit_charge: int,
-        channel_sequence: int,
-        status: int,
-        command: Command,
-        credits: int,
-        flags: HeaderFlags,
-        next_command: int,
-        message_id: int,
-        async_id: int,
-        session_id: int,
-        signature: bytes,
-    ) -> None:
-        super().__init__(b"\xFESMB")
-        object.__setattr__(self, "credit_charge", credit_charge)
-        object.__setattr__(self, "channel_sequence", channel_sequence)
-        object.__setattr__(self, "status", status)
-        object.__setattr__(self, "command", command)
-        object.__setattr__(self, "credits", credits)
-        object.__setattr__(self, "flags", flags)
-        object.__setattr__(self, "next_command", next_command)
-        object.__setattr__(self, "message_id", message_id)
-        object.__setattr__(self, "async_id", async_id)
-        object.__setattr__(self, "session_id", session_id)
-        object.__setattr__(self, "signature", signature)
-
-    def pack(self) -> bytes:
-        status = self.status
-        if self.channel_sequence:
-            status = self.channel_sequence
-
-        return b"".join(
-            [
-                self.protocol_id,
-                b"\x40\x00",  # StructureSize (64)
-                self.credit_charge.to_bytes(2, byteorder="little"),
-                status.to_bytes(4, byteorder="little"),
-                self.command.value.to_bytes(2, byteorder="little"),
-                self.credits.to_bytes(2, byteorder="little"),
-                self.flags.value.to_bytes(4, byteorder="little"),
-                self.next_command.to_bytes(4, byteorder="little"),
-                self.message_id.to_bytes(8, byteorder="little"),
-                self.async_id.to_bytes(8, byteorder="little"),
-                self.session_id.to_bytes(8, byteorder="little"),
-                self.signature or (b"\x00" * 16),
-            ]
-        )
-
-    @classmethod
-    def unpack(
-        cls,
-        data: typing.Union[bytes, bytearray, memoryview],
-        offset: int = 0,
-    ) -> typing.Tuple["SMB2HeaderAsync", int]:
-        view = memoryview(data)[offset:]
-
-        credit_charge = struct.unpack("<H", view[6:8])[0]
-        channel_sequence = struct.unpack("<H", view[8:10])[0]
-        status = struct.unpack("<I", view[8:12])[0]
-        command = Command(struct.unpack("<H", view[12:14])[0])
-        credits = struct.unpack("<H", view[14:16])[0]
-        flags = HeaderFlags(struct.unpack("<I", view[16:20])[0])
-        next_command = struct.unpack("<I", view[20:24])[0]
-        message_id = status.unpack("<Q", view[24:32])[0]
-        async_id = status.unpack("<Q", view[32:40])[0]
-        session_id = struct.unpack("<Q", view[40:48])[0]
-        signature = bytes(view[48:64])
-
-        return (
-            SMB2HeaderAsync(
-                credit_charge=credit_charge,
-                channel_sequence=channel_sequence,
-                status=status,
-                command=command,
-                credits=credits,
-                flags=flags,
-                next_command=next_command,
-                message_id=message_id,
-                async_id=async_id,
-                session_id=session_id,
-                signature=signature,
-            ),
-            64,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
-class SMB2HeaderSync(SMBHeader):
-    __slots__ = (
-        "credit_charge",
-        "channel_sequence",
-        "status",
-        "command",
-        "credits",
-        "flags",
-        "next_command",
-        "message_id",
         "tree_id",
         "session_id",
         "signature",
@@ -302,6 +187,7 @@ class SMB2HeaderSync(SMBHeader):
     flags: HeaderFlags
     next_command: int
     message_id: int
+    async_id: int
     tree_id: int
     session_id: int
     signature: bytes
@@ -317,6 +203,7 @@ class SMB2HeaderSync(SMBHeader):
         flags: HeaderFlags,
         next_command: int,
         message_id: int,
+        async_id: int,
         tree_id: int,
         session_id: int,
         signature: bytes,
@@ -330,6 +217,7 @@ class SMB2HeaderSync(SMBHeader):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "next_command", next_command)
         object.__setattr__(self, "message_id", message_id)
+        object.__setattr__(self, "async_id", async_id)
         object.__setattr__(self, "tree_id", tree_id)
         object.__setattr__(self, "session_id", session_id)
         object.__setattr__(self, "signature", signature)
@@ -338,6 +226,13 @@ class SMB2HeaderSync(SMBHeader):
         status = self.status
         if self.channel_sequence:
             status = self.channel_sequence
+
+        # The async and sync header is the same except the async header has an 8 byte AsyncId field whereas the sync
+        # header has a Reserved + TreeId field. Use the specified flags to differenciate between the 2.
+        if self.flags & HeaderFlags.ASYNC_COMMAND:
+            async_tree_id_field = self.async_id.to_bytes(8, byteorder="little")
+        else:
+            async_tree_id_field = b"\x00\x00\x00\x00" + self.tree_id.to_bytes(4, byteorder="little")
 
         return b"".join(
             [
@@ -350,8 +245,7 @@ class SMB2HeaderSync(SMBHeader):
                 self.flags.value.to_bytes(4, byteorder="little"),
                 self.next_command.to_bytes(4, byteorder="little"),
                 self.message_id.to_bytes(8, byteorder="little"),
-                b"\x00\x00\x00\x00",  # Reserved
-                self.tree_id.to_bytes(4, byteorder="little"),
+                async_tree_id_field,
                 self.session_id.to_bytes(8, byteorder="little"),
                 self.signature or (b"\x00" * 16),
             ]
@@ -362,7 +256,7 @@ class SMB2HeaderSync(SMBHeader):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> typing.Tuple["SMB2HeaderSync", int]:
+    ) -> typing.Tuple["SMB2Header", int]:
         view = memoryview(data)[offset:]
 
         credit_charge = struct.unpack("<H", view[6:8])[0]
@@ -373,12 +267,19 @@ class SMB2HeaderSync(SMBHeader):
         flags = HeaderFlags(struct.unpack("<I", view[16:20])[0])
         next_command = struct.unpack("<I", view[20:24])[0]
         message_id = struct.unpack("<Q", view[24:32])[0]
-        tree_id = struct.unpack("<I", view[36:40])[0]
+
+        if flags & HeaderFlags.ASYNC_COMMAND:
+            async_id = struct.unpack("<Q", view[32:40])[0]
+            tree_id = 0
+        else:
+            async_id = 0
+            tree_id = struct.unpack("<I", view[36:40])[0]
+
         session_id = struct.unpack("<Q", view[40:48])[0]
         signature = bytes(view[48:64])
 
         return (
-            SMB2HeaderSync(
+            SMB2Header(
                 credit_charge=credit_charge,
                 channel_sequence=channel_sequence,
                 status=status,
@@ -387,6 +288,7 @@ class SMB2HeaderSync(SMBHeader):
                 flags=flags,
                 next_command=next_command,
                 message_id=message_id,
+                async_id=async_id,
                 tree_id=tree_id,
                 session_id=session_id,
                 signature=signature,
@@ -483,11 +385,7 @@ def unpack_header(
     if protocol_id == b"\xFFSMB":
         header_cls = SMB1Header
     elif protocol_id == b"\xFESMB":
-        flags = HeaderFlags(struct.unpack("<I", view[16:20])[0])
-        if flags & HeaderFlags.ASYNC_COMMAND:
-            header_cls = SMB2HeaderAsync
-        else:
-            header_cls = SMB2HeaderSync
+        header_cls = SMB2Header
     elif protocol_id == b"\xFDSMB":
         header_cls = TransformHeader
     else:

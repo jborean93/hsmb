@@ -1,64 +1,89 @@
 import asyncio
-import os
 import struct
-import uuid
+import typing
 
 import spnego
 
 import hsmb
 
 
-async def tcp_write(writer: asyncio.StreamWriter, data: bytes) -> None:
-    writer.write(len(data).to_bytes(4, byteorder="big"))
-    writer.write(data)
-    await writer.drain()
+class TcpConnection:
+    def __init__(
+        self,
+        host: str,
+        port: int = 445,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self._reader: typing.Optional[asyncio.StreamReader] = None
+        self._writer: typing.Optional[asyncio.StreamWriter] = None
 
+    async def __aenter__(self) -> "TcpConnection":
+        self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
 
-async def tcp_read(reader: asyncio.StreamReader) -> bytes:
-    raw_len = await reader.read(4)
-    data_len = struct.unpack(">I", raw_len)[0]
-    return await reader.read(data_len)
+        return self
+
+    async def __aexit__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+        if self._writer:
+            self._writer.close()
+            await self._writer.wait_closed()
+            self._reader = self._writer = None
+
+    async def send(self, data: bytes) -> None:
+        if not self._writer:
+            raise Exception("Connection is not open")
+
+        self._writer.write(len(data).to_bytes(4, byteorder="big"))
+        self._writer.write(data)
+        await self._writer.drain()
+
+    async def recv(self) -> bytes:
+        if not self._reader:
+            raise Exception("Connection is not open")
+
+        raw_len = await self._reader.read(4)
+        if not raw_len:
+            raise Exception("No data received")
+
+        data_len = struct.unpack(">I", raw_len)[0]
+        return await self._reader.read(data_len)
 
 
 async def main() -> None:
-    reader, writer = await asyncio.open_connection("127.0.0.1", 445)
-    conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), "127.0.0.1")
-    conn.open()
+    async with TcpConnection("127.0.0.1", 445) as tcp:
+        conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), "127.0.0.1")
+        conn.open()
 
-    while True:
-        data = conn.data_to_send()
-        if not data:
-            break
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        conn.next_event()
 
-        await tcp_write(writer, data)
-        conn.receive_data(await tcp_read(reader))
-        event = conn.next_event()
+        auth = spnego.client("smbuser", "smbpassword")
+        token = auth.step(conn.gss_negotiate_token)
 
-    auth = spnego.client("smbuser", "smbpassword")
-    token = auth.step(conn.gss_negotiate_token)
-    session = hsmb.SMBClientSession(conn)
+        with hsmb.SMBClientSession(conn) as session:
+            while not auth.complete:
+                event = conn.next_event()
 
-    while True:
-        session.open(token)
-        data = conn.data_to_send()
-        if not data:
-            break
+                if not event:
+                    session.open(token)
 
-        await tcp_write(writer, data)
-        conn.receive_data(await tcp_read(reader))
-        event = conn.next_event()
+                    await tcp.send(conn.data_to_send())
+                    conn.receive_data(await tcp.recv())
+                    continue
 
-        if event.header.status == 0:
-            break
+                if isinstance(event, hsmb.SecurityTokenReceived):
+                    if event.token:
+                        token = auth.step(event.token)
 
-        elif event.header.status != 0xC0000016:
-            raise Exception(f"Received unknown status {event.header.status}")
+                    if event.require_session_key:
+                        session.set_session_key(auth.session_key)
 
-        else:
-            session.session_id = event.header.session_id
-            token = event.message.security_buffer
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        conn.next_event()
 
-    a = ""
+        a = ""
 
 
 if __name__ == "__main__":

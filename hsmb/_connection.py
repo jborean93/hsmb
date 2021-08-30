@@ -6,9 +6,15 @@ import base64
 import dataclasses
 import datetime
 import enum
+import hashlib
+import hmac
 import os
 import typing
 import uuid
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import cmac
+from cryptography.hazmat.primitives.ciphers import algorithms
 
 from hsmb._config import (
     ClientServer,
@@ -22,8 +28,7 @@ from hsmb._headers import (
     HeaderFlags,
     SMB1Header,
     SMB1HeaderFlags,
-    SMB2HeaderAsync,
-    SMB2HeaderSync,
+    SMB2Header,
     SMBHeader,
     TransformHeader,
     unpack_header,
@@ -41,23 +46,29 @@ from hsmb._messages import (
     SMBMessage,
 )
 from hsmb._negotiate_contexts import (
-    Cipher,
-    CompressionAlgorithm,
+    CipherBase,
+    CompressionAlgorithmBase,
     CompressionCapabilities,
     CompressionCapabilityFlags,
     ContextType,
     EncryptionCapabilities,
-    HashAlgorithm,
+    HashAlgorithmBase,
     NegotiateContext,
     NetnameNegotiate,
     PreauthIntegrityCapabilities,
     RdmaTransformCapabilities,
     RdmaTransformId,
-    SigningAlgorithm,
+    SigningAlgorithmBase,
     SigningCapabilities,
     TransportCapabilities,
     TransportCapabilityFlags,
 )
+
+if typing.TYPE_CHECKING:
+    from hsmb._session import SMBClientSession
+
+MessageType = typing.TypeVar("MessageType", bound=SMBMessage)
+ResponseCallback = typing.Optional[typing.Callable[[SMB2Header, MessageType, memoryview], typing.Optional[Event]]]
 
 
 class TransportIdentifier(enum.Enum):
@@ -74,6 +85,7 @@ class PendingRequest:
     cancel_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
     timestamp: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
     buffer_descriptor_list: typing.List = dataclasses.field(default_factory=list)
+    receive_callback: ResponseCallback = None
 
 
 class SMBClientConnection:
@@ -89,8 +101,8 @@ class SMBClientConnection:
 
         self.transport_identifier = transport_identifier
 
-        self.session_table: typing.Dict = {}
-        self.preauth_session_table: typing.Dict = {}
+        self.session_table: typing.Dict[int, "SMBClientSession"] = {}
+        self.preauth_session_table: typing.Dict[int, "SMBClientSession"] = {}
         self.outstanding_requests: typing.Dict[int, PendingRequest] = {}
         self.sequence_window: typing.List[typing.Tuple[int, int]] = [(0, 1)]
         self.gss_negotiate_token: typing.Optional[bytes] = None
@@ -120,16 +132,16 @@ class SMBClientConnection:
         self.offered_dialects: typing.List[Dialect] = []
 
         # SMB 3.1.1
-        self.preauth_integirty_hash_id: typing.Optional[HashAlgorithm] = None
-        self.preauth_integrity_hash_value = bytearray()
-        self.cipher_id: typing.Optional[Cipher] = None
-        self.compression_ids: typing.List[CompressionAlgorithm] = []
+        self.preauth_integrity_hash_id: typing.Optional[HashAlgorithmBase] = None
+        self.preauth_integrity_hash_value = b""
+        self.cipher_id: typing.Optional[CipherBase] = None
+        self.compression_ids: typing.List[CompressionAlgorithmBase] = []
         self.supports_chained_compression = False
         self.rdma_transform_ids: typing.List[RdmaTransformId] = []
-        self.signing_algorithm_id: typing.Optional[SigningAlgorithm] = None
+        self.signing_algorithm_id: typing.Optional[SigningAlgorithmBase] = None
         self.accept_transport_security = False
 
-    def send(
+    def create_header(
         self,
         message: SMBMessage,
         channel_sequence: int = 0,
@@ -139,7 +151,8 @@ class SMBClientConnection:
         session_id: int = 0,
         tree_id: int = 0,
         final: bool = True,
-    ) -> None:
+        callback: ResponseCallback = None,
+    ) -> bytes:
         flags = HeaderFlags.NONE
 
         if related:
@@ -202,7 +215,11 @@ class SMBClientConnection:
             else:
                 raise Exception("Out of credits")
 
-        header = SMB2HeaderSync(
+        session = self.session_table.get(session_id, None)
+        if session and session.signing_required and not session.encrypt_data:
+            flags |= HeaderFlags.SIGNED
+
+        header = SMB2Header(
             credit_charge=credit_charge,
             channel_sequence=channel_sequence,
             status=0,
@@ -211,15 +228,32 @@ class SMBClientConnection:
             flags=flags,
             next_command=next_command,
             message_id=message_id,
+            async_id=0,
             tree_id=tree_id,
             session_id=session_id,
             signature=b"\x00" * 16,
         )
-        self.outstanding_requests[message_id] = PendingRequest(message=message)
-        header_data = header.pack()
+        self.outstanding_requests[message_id] = PendingRequest(message=message, receive_callback=callback)
 
-        self._data_to_send += header_data
-        self._data_to_send += message.pack(len(header_data))
+        raw_data = bytearray(header.pack())
+        raw_data += message.pack(len(raw_data))
+
+        if flags & HeaderFlags.SIGNED:
+            if self.signing_algorithm_id:
+                raise NotImplementedError()
+
+            elif self.dialect >= Dialect.SMB300:
+                c = cmac.CMAC(algorithms.AES(session.signing_key), backend=default_backend())
+                c.update(bytes(raw_data))
+                signature = c.finalize()
+
+            else:
+                hmac_algo = hmac.new(session.signing_key, raw_data, digestmod=hashlib.sha256)
+                signature = hmac_algo.digest()[:16]
+
+            memoryview(raw_data)[48:64] = signature
+
+        return bytes(raw_data)
 
     def data_to_send(
         self,
@@ -244,36 +278,47 @@ class SMBClientConnection:
     def next_event(
         self,
     ) -> typing.Optional[Event]:
-        header, offset = unpack_header(self._receive_buffer)
+        raw = memoryview(self._receive_buffer)
+        if not raw:
+            return None
+
+        header, offset = unpack_header(raw)
 
         if isinstance(header, TransformHeader):
             raise Exception("FIXME decryption")
 
-        command: Command
-        if isinstance(header, SMB1Header):
+        elif isinstance(header, SMB1Header):
             if header.command != Command.SMB1_NEGOTIATE:
                 raise Exception("Expecting SMB1 NEGOTIATE command")
 
-            command = Command(header.command)
-            next_command = 0
-            message_id = 0
-            granted_credits = 1
+            header = SMB2Header(
+                credit_charge=0,
+                channel_sequence=0,
+                status=0,
+                command=Command.NEGOTIATE,
+                credits=1,
+                flags=HeaderFlags.NONE,
+                next_command=0,
+                message_id=0,
+                async_id=0,
+                tree_id=0,
+                session_id=0,
+                signature=b"\x00" * 16,
+            )
+            self.sequence_window.append((1, 0))
 
-            self.sequence_window.append((1, 1))
-
-        elif isinstance(header, (SMB2HeaderSync, SMB2HeaderAsync)):
-            command = header.command
-            next_command = header.next_command
-            message_id = header.message_id
-            granted_credits = header.credits
-
-        else:
+        if not isinstance(header, SMB2Header):
             raise Exception("Unknown header this shouldn't occur ever")
 
+        command = header.command
+        next_command = header.next_command
+        message_id = header.message_id
+        granted_credits = header.credits
         self.sequence_window[-1] = (self.sequence_window[-1][0], self.sequence_window[-1][1] + granted_credits)
 
         message_cls = MESSAGES[command][1]
         message, message_offset = message_cls.unpack(self._receive_buffer, offset, offset)
+        raw = raw[: offset + message_offset]
 
         if next_command:
             self._receive_buffer = self._receive_buffer[next_command:]
@@ -282,11 +327,16 @@ class SMBClientConnection:
             self._receive_buffer = self._receive_buffer[offset + message_offset :].lstrip(b"\x00")
 
         request = self.outstanding_requests[message_id]
-        process_func = getattr(self, f"_process_{command.name.lower()}", None)
-        if process_func:
-            process_func(request, message)
+        if request.receive_callback:
+            new_event = request.receive_callback(header, message, raw)
+            if new_event:
+                return new_event
 
-        return ResponseReceived(header, message)
+        if header.status == 0:
+            return ResponseReceived(header, message)
+
+        else:
+            raise Exception(f"Received unknown status 0x{header.status:8X}")
 
     def open(
         self,
@@ -314,15 +364,15 @@ class SMBClientConnection:
 
             return
 
-        self.our_security_mode = (
+        self.client_security_mode = (
             SecurityModes.SIGNING_REQUIRED if self.config.require_message_signing else SecurityModes.SIGNING_ENABLED
         )
 
         if highest_dialect >= Dialect.SMB210:
-            self.our_identifier = self.config.client_guid
+            self.client_identifier = self.config.client_guid
 
         if highest_dialect >= Dialect.SMB300:
-            self.our_capabilities = Capabilities.NONE
+            self.client_capabilities = Capabilities.NONE
 
         contexts: typing.List[NegotiateContext] = []
         if highest_dialect >= Dialect.SMB311:
@@ -371,28 +421,31 @@ class SMBClientConnection:
             ):
                 contexts.append(TransportCapabilities(flags=TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY))
 
-        self.send(
-            NegotiateRequest(
-                dialects=self.offered_dialects,
-                security_mode=self.our_security_mode,
-                capabilities=self.our_capabilities,
-                client_guid=self.our_identifier,
-                negotiate_contexts=contexts,
-            )
+        msg = NegotiateRequest(
+            dialects=self.offered_dialects,
+            security_mode=self.client_security_mode,
+            capabilities=self.client_capabilities,
+            client_guid=self.client_identifier,
+            negotiate_contexts=contexts,
         )
+        data = self.create_header(msg, callback=self._process_negotiate)
+
+        self.preauth_integrity_hash_value = data
+        self._data_to_send += data
 
     def close(self) -> None:
         pass
 
     def _process_negotiate(
         self,
-        request: PendingRequest,
+        header: SMB2Header,
         message: NegotiateResponse,
+        raw: memoryview,
     ) -> None:
         self.max_transact_size = message.max_transact_size
         self.max_read_size = message.max_read_size
         self.max_write_size = message.max_write_size
-        self.their_guid = message.server_guid
+        self.server_guid = message.server_guid
         self.gss_negotiate_token = message.security_buffer
         self.require_signing = bool(message.security_mode & SecurityModes.SIGNING_REQUIRED)
 
@@ -403,6 +456,7 @@ class SMBClientConnection:
         if message.dialect_revision not in self.offered_dialects:
             raise Exception("Received dialect we didn't ask for")
 
+        self.dialect = message.dialect_revision
         if message.dialect_revision >= Dialect.SMB210:
             self.supports_file_leasing = bool(message.capabilities & Capabilities.LEASING)
             self.supports_multi_credit = bool(message.capabilities & Capabilities.LARGE_MTU)
@@ -414,8 +468,8 @@ class SMBClientConnection:
             if message.dialect_revision < Dialect.SMB311:
                 self.supports_encryption = bool(message.capabilities & Capabilities.ENCRYPTION)
 
-            self.their_capabilities = message.capabilities
-            self.their_security_mode = message.security_mode
+            self.server_capabilities = message.capabilities
+            self.server_security_mode = message.security_mode
 
             if self.server_name:
                 self.server = self.config.server_list.setdefault(
@@ -432,36 +486,59 @@ class SMBClientConnection:
                 # FIXME: Verify all this
 
         if message.dialect_revision >= Dialect.SMB311:
+            pending_request = self.outstanding_requests[header.message_id]
+            request = pending_request.message
+            if not isinstance(request, NegotiateRequest):
+                raise Exception("This shouln't happen")
+
+            request_contexts: typing.Dict[ContextType, NegotiateContext] = {}
+            for context in request.negotiate_contexts:
+                request_contexts[context.context_type] = context
+
             found_contexts: typing.Set[ContextType] = set()
             for context in message.negotiate_contexts:
                 if context.context_type in found_contexts:
                     raise Exception(f"Found multiple context {context.context_type}")
-
                 found_contexts.add(context.context_type)
 
                 if isinstance(context, PreauthIntegrityCapabilities):
                     if len(context.hash_algorithms) != 1:
                         raise Exception(f"Found {len(context.hash_algorithms)} algorithms, expecting 1")
 
-                    # TODO: Verify it's in the original request
-                    self.preauth_integirty_hash_id = context.hash_algorithms[0]
+                    algorithm_id = context.hash_algorithms[0]
+                    request_preauth = typing.cast(
+                        typing.Optional[PreauthIntegrityCapabilities], request_contexts.get(context.context_type, None)
+                    )
+                    if not request_preauth or algorithm_id not in request_preauth.hash_algorithms:
+                        raise Exception("Unexpected pre auth hash algorithm selected")
+
+                    hash_algo = next(
+                        h for h in self.config.registered_hash_algorithms or [] if h.algorithm_id() == algorithm_id
+                    )
+                    self.preauth_integrity_hash_id = hash_algo()
 
                 elif isinstance(context, EncryptionCapabilities):
                     if len(context.ciphers) != 1:
                         raise Exception(f"Found {len(context.ciphers)} ciphers, expecting 1")
-                    # TODO: Verify cipher is in the original request
+
                     if context.ciphers[0] != 0:
-                        self.supports_encryption = True
-                        self.cipher_id = context.ciphers[0]
+                        cipher_id = context.ciphers[0]
+                        request_cipher = typing.cast(
+                            typing.Optional[EncryptionCapabilities], request_contexts.get(context.context_type, None)
+                        )
+                        if not request_cipher or cipher_id not in request_cipher.ciphers:
+                            raise Exception("Unexpected cipher selected")
 
-                        if self.server:
-                            self.server.cipher_id = context.ciphers[0]
+                        cipher = next(c for c in self.config.registered_ciphers or [] if c.cipher_id() == cipher_id)
+                        self.cipher_id = cipher()
 
-            if ContextType.PREAUTH_INTEGRITY_CAPABILITIES not in found_contexts:
+            if not self.preauth_integrity_hash_id:
                 raise Exception("Was expecting at least 1 preauth int cap")
 
-            # FIXME
-            self.preauth_integrity_hash_value += b""
+            # The current value contains the full request - replace this with the hash value now the hash algorithm
+            # has been negotiated.
+            new_hash = self.preauth_integrity_hash_id.hash((b"\x00" * 64) + self.preauth_integrity_hash_value)
+            self.preauth_integrity_hash_value = self.preauth_integrity_hash_id.hash(new_hash + bytes(raw))
 
 
 """
@@ -490,8 +567,8 @@ class SMBServerConnection(SMBConnection[SMBServerConfig]):
             if self.dialect and self.dialect != Dialect.SMB2_WILDCARD:
                 raise ValueError("Already negotiated")
 
-            self.their_capabilities = message.capabilities
-            self.their_identifier = message.client_guid
+            self.server_capabilities = message.capabilities
+            self.server_identifier = message.client_guid
 
             if len(message.dialects) == 0:
                 raise ValueError("Return STATUS_INVALID_PARAMETER")
@@ -500,10 +577,10 @@ class SMBServerConnection(SMBConnection[SMBServerConfig]):
             self.dialect = sorted(message.dialects, reverse=True)[0]
 
         nego_resp = NegotiateResponse(
-            security_mode=self.our_security_mode,
+            security_mode=self.client_security_mode,
             dialect_revision=self.dialect,
-            server_guid=self.our_identifier,
-            capabilities=self.our_capabilities,
+            server_guid=self.client_identifier,
+            capabilities=self.client_capabilities,
             max_transact_size=self.max_transact_size,
             max_read_size=self.max_read_size,
             max_write_size=self.max_write_size,
@@ -519,12 +596,12 @@ class SMBServerConnection(SMBConnection[SMBServerConfig]):
             self.dialect = Dialect.SMB2_WILDCARD
 
         if self.dialect:
-            self.our_security_mode = SecurityModes.SIGNING_ENABLED
+            self.client_security_mode = SecurityModes.SIGNING_ENABLED
             if self.config.require_message_signing:
-                self.our_security_mode = SecurityModes.SIGNING_REQUIRED
+                self.client_security_mode = SecurityModes.SIGNING_REQUIRED
 
-            self.our_identifier = self.config.identifier
-            self.our_capabilities = Capabilities.NONE
+            self.client_identifier = self.config.identifier
+            self.client_capabilities = Capabilities.NONE
             # FIXME: Add DFS capability based on config
             # FIXME: Set LEASING, LARGE_MTU if wildcard
             # FIXME: Max sizes should be 65536 if 2.0.2

@@ -14,13 +14,11 @@ from hsmb._negotiate_contexts import (
     DEFAULT_COMPRESSORS,
     DEFAULT_HASHERS,
     DEFAULT_SIGNERS,
-    Cipher,
     CipherBase,
-    CompressorBase,
+    CompressionAlgorithmBase,
     HashAlgorithmBase,
     RdmaTransformId,
-    SignerBase,
-    SigningAlgorithm,
+    SigningAlgorithmBase,
 )
 
 if typing.TYPE_CHECKING:
@@ -68,9 +66,9 @@ class ClientServer:
     security_mode: SecurityModes
     address_list: typing.List[str]
     server_name: str
-    cipher_id: typing.Optional[Cipher] = None
+    cipher_id: typing.Optional[CipherBase] = None
     rdma_transform_ids: typing.List[RdmaTransformId] = dataclasses.field(default_factory=list)
-    signing_algorithm_id: typing.Optional[SigningAlgorithm] = None
+    signing_algorithm_id: typing.Optional[SigningAlgorithmBase] = None
 
 
 @dataclasses.dataclass
@@ -154,8 +152,8 @@ class SMBConfig:
 
     registered_hash_algorithms: typing.Optional[typing.List[typing.Type[HashAlgorithmBase]]] = None
     registered_ciphers: typing.Optional[typing.List[typing.Type[CipherBase]]] = None
-    registered_compressors: typing.Optional[typing.List[typing.Type[CompressorBase]]] = None
-    registered_signing_algorithms: typing.Optional[typing.List[typing.Type[SignerBase]]] = None
+    registered_compressors: typing.Optional[typing.List[typing.Type[CompressionAlgorithmBase]]] = None
+    registered_signing_algorithms: typing.Optional[typing.List[typing.Type[SigningAlgorithmBase]]] = None
 
     def __post_init__(self) -> None:
         if self.registered_hash_algorithms is None:
