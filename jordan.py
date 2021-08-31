@@ -50,15 +50,23 @@ class TcpConnection:
 
 
 async def main() -> None:
-    async with TcpConnection("127.0.0.1", 445) as tcp:
-        conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), "127.0.0.1")
+    # server = "127.0.0.1"
+    # username = "smbuser"
+    # password = "smbpass"
+
+    server = "server2022.domain.test"
+    username = "vagrant-domain@DOMAIN.TEST"
+    password = "VagrantPass1"
+
+    async with TcpConnection(server, 445) as tcp:
+        conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), server)
         conn.open()
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
         conn.next_event()
 
-        auth = spnego.client("smbuser", "smbpassword")
+        auth = spnego.client(username, password)
         token = auth.step(conn.gss_negotiate_token)
 
         with hsmb.SMBClientSession(conn) as session:

@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC, CounterLocation, Mode
 
 from hsmb._connection import PendingRequest, SMBClientConnection
+from hsmb._crypto import smb3kdf
 from hsmb._events import Event, SecurityTokenReceived
 from hsmb._headers import HeaderFlags, SMB2Header
 from hsmb._messages import (
@@ -26,41 +27,6 @@ from hsmb._messages import (
     SessionSetupResponse,
 )
 from hsmb._negotiate_contexts import Cipher
-
-
-def smb3kdf(
-    ki: bytes,
-    label: bytes,
-    context: bytes,
-) -> bytes:
-    """SMB 3.x key derivation function.
-
-    See `SMB 3.x key derivation function`_
-
-    Args:
-        ki: The session key negotiated between the client and server.
-        label: The label/purpose of the key.
-        context: Context information for the SMB connection.
-
-    Returns:
-        bytes: The key derived by the KDF as specified by [SP800-108] 5.1.
-
-    .. SMB 3.x key derivation function:
-        https://blogs.msdn.microsoft.com/openspecification/2017/05/26/smb-2-and-smb-3-security-in-windows-10-the-anatomy-of-signing-and-cryptographic-keys/
-    """
-    kdf = KBKDFHMAC(
-        algorithm=hashes.SHA256(),
-        mode=Mode.CounterMode,
-        length=16,
-        rlen=4,
-        llen=4,
-        location=CounterLocation.BeforeFixed,
-        label=label,
-        context=context,
-        fixed=None,
-        backend=default_backend(),  # type: ignore[no-untyped-call]
-    )
-    return kdf.derive(ki)
 
 
 class SMBClientSession:
@@ -111,13 +77,11 @@ class SMBClientSession:
             security_buffer=security_buffer,
         )
 
-        data_offset = len(self.connection._data_to_send)
-        self.connection.create_header(req, session_id=self.session_id, callback=self._process_session_setup)
-        send_data = bytes(self.connection._data_to_send[data_offset:])
+        send_view = self.connection.send(req, session_id=self.session_id, callback=self._process_session_setup)
 
         if self.connection.preauth_integrity_hash_id:
             self.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
-                self.preauth_integrity_hash_value + send_data
+                self.preauth_integrity_hash_value + bytes(send_view)
             )
 
     def set_session_key(
@@ -143,14 +107,17 @@ class SMBClientSession:
             self.application_key = smb3kdf(self.session_key, b"SMBAppKey\x00", self.preauth_integrity_hash_value)
 
             key = self.session_key
+            length = 16
+
             if self.connection.cipher_id and self.connection.cipher_id.cipher_id() in [
                 Cipher.AES256_CCM,
                 Cipher.AES256_GCM,
             ]:
                 key = self.full_session_key
+                length = 32
 
-            self.encryption_key = smb3kdf(key, b"SMBC2SCipherKey\x00", self.preauth_integrity_hash_value)
-            self.decryption_key = smb3kdf(key, b"SMBS2CCipherKey\x00", self.preauth_integrity_hash_value)
+            self.encryption_key = smb3kdf(key, b"SMBC2SCipherKey\x00", self.preauth_integrity_hash_value, length=length)
+            self.decryption_key = smb3kdf(key, b"SMBS2CCipherKey\x00", self.preauth_integrity_hash_value, length=length)
 
         elif self.connection.dialect >= Dialect.SMB300:
             self.signing_key = smb3kdf(self.session_key, b"SMB2AESCMAC\x00", b"SmbSign\x00")
@@ -174,14 +141,7 @@ class SMBClientSession:
             expected_signature = header.signature
             memoryview(raw_header)[48:64] = b"\x00" * 16
 
-            if self.connection.dialect >= Dialect.SMB300:
-                c = cmac.CMAC(algorithms.AES(self.signing_key), backend=default_backend())
-                c.update(bytes(raw_header))
-                actual_signature = c.finalize()
-
-            else:
-                hmac_algo = hmac.new(self.signing_key, bytes(raw_header), digestmod=hashlib.sha256)
-                actual_signature = hmac_algo.digest()[:16]
+            actual_signature = self.connection.signing_algorithm_id.sign(self.signing_key, header, bytes(raw_header))
 
             if actual_signature != expected_signature:
                 raise Exception("Signature mismatch")
@@ -215,4 +175,4 @@ class SMBClientSession:
         return None
 
     def close(self) -> None:
-        self.connection.create_header(LogoffRequest(), session_id=self.session_id)
+        self.connection.send(LogoffRequest(), session_id=self.session_id)

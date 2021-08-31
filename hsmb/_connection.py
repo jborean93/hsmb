@@ -6,15 +6,9 @@ import base64
 import dataclasses
 import datetime
 import enum
-import hashlib
-import hmac
 import os
 import typing
 import uuid
-
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import cmac
-from cryptography.hazmat.primitives.ciphers import algorithms
 
 from hsmb._config import (
     ClientServer,
@@ -22,6 +16,11 @@ from hsmb._config import (
     SMBConfig,
     SMBRole,
     SMBServerConfig,
+)
+from hsmb._crypto import (
+    AES128CCMCipher,
+    AESCMACSigningAlgorithm,
+    HMACSHA256SigningAlgorithm,
 )
 from hsmb._events import Event, RequestReceived, ResponseReceived
 from hsmb._headers import (
@@ -141,7 +140,7 @@ class SMBClientConnection:
         self.signing_algorithm_id: typing.Optional[SigningAlgorithmBase] = None
         self.accept_transport_security = False
 
-    def create_header(
+    def send(
         self,
         message: SMBMessage,
         channel_sequence: int = 0,
@@ -152,7 +151,7 @@ class SMBClientConnection:
         tree_id: int = 0,
         final: bool = True,
         callback: ResponseCallback = None,
-    ) -> None:
+    ) -> memoryview:
         flags = HeaderFlags.NONE
 
         if related:
@@ -239,21 +238,16 @@ class SMBClientConnection:
         raw_data += message.pack(len(raw_data))
 
         if flags & HeaderFlags.SIGNED:
-            if self.signing_algorithm_id:
-                raise NotImplementedError()
-
-            elif self.dialect >= Dialect.SMB300:
-                c = cmac.CMAC(algorithms.AES(session.signing_key), backend=default_backend())
-                c.update(bytes(raw_data))
-                signature = c.finalize()
-
-            else:
-                hmac_algo = hmac.new(session.signing_key, raw_data, digestmod=hashlib.sha256)
-                signature = hmac_algo.digest()[:16]
-
+            signature = self.signing_algorithm_id.sign(session.signing_key, header, bytes(raw_data))
             memoryview(raw_data)[48:64] = signature
 
+        if session and session.encrypt_data:
+            raw_data = self.cipher_id.encrypt(session.encryption_key, header, bytes(raw_data))
+
+        offset = len(self._data_to_send)
         self._data_to_send += raw_data
+
+        return memoryview(self._data_to_send)[offset : len(raw_data)]
 
     def data_to_send(
         self,
@@ -285,7 +279,10 @@ class SMBClientConnection:
         header, offset = unpack_header(raw)
 
         if isinstance(header, TransformHeader):
-            raise Exception("FIXME decryption")
+            session = self.session_table[header.session_id]
+            decrypted_data = self.cipher_id.decrypt(session.decryption_key, header, bytes(self._receive_buffer))
+            raw = memoryview(decrypted_data)
+            header, offset = unpack_header(raw)
 
         elif isinstance(header, SMB1Header):
             if header.command != Command.SMB1_NEGOTIATE:
@@ -428,8 +425,8 @@ class SMBClientConnection:
             client_guid=self.client_identifier,
             negotiate_contexts=contexts,
         )
-        self.create_header(msg, callback=self._process_negotiate)
-        self.preauth_integrity_hash_value = bytes(self._data_to_send)
+        send_view = self.send(msg, callback=self._process_negotiate)
+        self.preauth_integrity_hash_value = bytes(send_view)
 
     def close(self) -> None:
         pass
@@ -483,6 +480,13 @@ class SMBClientConnection:
                 )
                 # FIXME: Verify all this
 
+            # If on SMB 3.1.1 and a different algo was negotiated it will be overwritten below.
+            self.cipher_id = AES128CCMCipher()
+            self.signing_algorithm_id = AESCMACSigningAlgorithm()
+
+        else:
+            self.signing_algorithm_id = HMACSHA256SigningAlgorithm()
+
         if message.dialect_revision >= Dialect.SMB311:
             pending_request = self.outstanding_requests[header.message_id]
             request = pending_request.message
@@ -529,6 +533,22 @@ class SMBClientConnection:
 
                         cipher = next(c for c in self.config.registered_ciphers or [] if c.cipher_id() == cipher_id)
                         self.cipher_id = cipher()
+
+                elif isinstance(context, SigningCapabilities):
+                    if len(context.signing_algorithms) != 1:
+                        raise Exception(f"Found {len(context.signing_algorithms)} algorithms, expecting 1")
+
+                    sign_algo_id = context.signing_algorithms[0]
+                    request_signing = typing.cast(
+                        typing.Optional[SigningCapabilities], request_contexts.get(context.context_type, None)
+                    )
+                    if not request_signing or sign_algo_id not in request_signing.signing_algorithms:
+                        raise Exception("Unexpected signing algorithm selected")
+
+                    sign_algo = next(
+                        s for s in self.config.registered_signing_algorithms or [] if s.signing_id() == sign_algo_id
+                    )
+                    self.signing_algorithm_id = sign_algo()
 
             if not self.preauth_integrity_hash_id:
                 raise Exception("Was expecting at least 1 preauth int cap")

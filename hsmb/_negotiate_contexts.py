@@ -5,17 +5,11 @@
 import abc
 import dataclasses
 import enum
-import hashlib
 import struct
 import typing
 
-import cryptography
-
-HAS_XCA = True
-try:
-    import xca
-except ImportError:
-    HAS_XCA = False
+if typing.TYPE_CHECKING:
+    from hsmb._headers import SMB2Header, TransformHeader
 
 
 class ContextType(enum.IntEnum):
@@ -448,18 +442,6 @@ class HashAlgorithmBase(metaclass=abc.ABCMeta):
         ...
 
 
-class SHA512HashAlgorithm(HashAlgorithmBase):
-    @classmethod
-    def algorithm_id(cls) -> HashAlgorithm:
-        return HashAlgorithm.SHA512
-
-    def hash(self, data: bytes) -> bytes:
-        return hashlib.sha512(data).digest()
-
-
-DEFAULT_HASHERS: typing.List[typing.Type[HashAlgorithmBase]] = [SHA512HashAlgorithm]
-
-
 class CipherBase(metaclass=abc.ABCMeta):
     @classmethod
     @abc.abstractmethod
@@ -467,27 +449,22 @@ class CipherBase(metaclass=abc.ABCMeta):
         ...
 
     @abc.abstractmethod
-    def encrypt(self) -> bytes:
+    def encrypt(
+        self,
+        key: bytes,
+        header: "SMB2Header",
+        message: bytes,
+    ) -> bytes:
         ...
 
     @abc.abstractmethod
-    def decrypt(self) -> bytes:
+    def decrypt(
+        self,
+        key: bytes,
+        header: "TransformHeader",
+        message: bytes,
+    ) -> bytes:
         ...
-
-
-class AES128CCMCipher(CipherBase):
-    @classmethod
-    def cipher_id(cls) -> Cipher:
-        return Cipher.AES128_CCM
-
-    def encrypt(self) -> bytes:
-        return b""
-
-    def decrypt(self) -> bytes:
-        return b""
-
-
-DEFAULT_CIPHERS: typing.List[typing.Type[CipherBase]] = [AES128CCMCipher]
 
 
 class CompressionAlgorithmBase(metaclass=abc.ABCMeta):
@@ -505,23 +482,6 @@ class CompressionAlgorithmBase(metaclass=abc.ABCMeta):
         ...
 
 
-DEFAULT_COMPRESSORS: typing.List[typing.Type[CompressionAlgorithmBase]] = []
-if HAS_XCA:
-
-    class LZ77HuffmanCompressor(CompressionAlgorithmBase):
-        @classmethod
-        def compression_id(cls) -> CompressionAlgorithm:
-            return CompressionAlgorithm.LZ77_HUFFMAN
-
-        def compress(self) -> bytes:
-            ...
-
-        def decompress(self) -> bytes:
-            ...
-
-    DEFAULT_COMPRESSORS = [LZ77HuffmanCompressor]
-
-
 class SigningAlgorithmBase(metaclass=abc.ABCMeta):
     @classmethod
     @abc.abstractmethod
@@ -529,8 +489,10 @@ class SigningAlgorithmBase(metaclass=abc.ABCMeta):
         ...
 
     @abc.abstractmethod
-    def sign(self) -> bytes:
+    def sign(
+        self,
+        key: bytes,
+        header: "SMB2Header",
+        message: bytes,
+    ) -> bytes:
         ...
-
-
-DEFAULT_SIGNERS: typing.List[typing.Type[SigningAlgorithmBase]] = []

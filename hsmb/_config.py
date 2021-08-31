@@ -8,12 +8,18 @@ import enum
 import typing
 import uuid
 
+from hsmb._crypto import (
+    AES128CCMCipher,
+    AES128GCMCipher,
+    AES256CCMCipher,
+    AES256GCMCipher,
+    AESCMACSigningAlgorithm,
+    AESGMACSigningAlgorithm,
+    HMACSHA256SigningAlgorithm,
+    SHA512HashAlgorithm,
+)
 from hsmb._messages import Capabilities, Dialect, SecurityModes
 from hsmb._negotiate_contexts import (
-    DEFAULT_CIPHERS,
-    DEFAULT_COMPRESSORS,
-    DEFAULT_HASHERS,
-    DEFAULT_SIGNERS,
     CipherBase,
     CompressionAlgorithmBase,
     HashAlgorithmBase,
@@ -157,16 +163,20 @@ class SMBConfig:
 
     def __post_init__(self) -> None:
         if self.registered_hash_algorithms is None:
-            self.registered_hash_algorithms = DEFAULT_HASHERS
+            self.registered_hash_algorithms = [SHA512HashAlgorithm]
 
         if self.registered_ciphers is None:
-            self.registered_ciphers = DEFAULT_CIPHERS
+            self.registered_ciphers = [AES128GCMCipher, AES128CCMCipher, AES256GCMCipher, AES256CCMCipher]
 
         if self.registered_compressors is None:
-            self.registered_compressors = DEFAULT_COMPRESSORS
+            self.registered_compressors = []
 
         if self.registered_signing_algorithms is None:
-            self.registered_signing_algorithms = DEFAULT_SIGNERS
+            self.registered_signing_algorithms = [
+                AESGMACSigningAlgorithm,
+                AESCMACSigningAlgorithm,
+                HMACSHA256SigningAlgorithm,
+            ]
 
 
 @dataclasses.dataclass

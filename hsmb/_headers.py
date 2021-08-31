@@ -49,6 +49,7 @@ class SMB1HeaderFlags(enum.IntFlag):
 
 
 class TransformFlags(enum.IntFlag):
+    NONE = 0x0000
     ENCRYPTED = 0x0001
 
 
