@@ -59,7 +59,7 @@ class SMBHeader:
 
     protocol_id: bytes
 
-    def pack(self) -> bytes:
+    def pack(self) -> bytearray:
         raise NotImplementedError()
 
     @classmethod
@@ -106,13 +106,13 @@ class SMB1Header(SMBHeader):
         object.__setattr__(self, "mid", mid)
         object.__setattr__(self, "security_features", security_features)
 
-    def pack(self) -> bytes:
+    def pack(self) -> bytearray:
         flags1 = (self.flags & 0x00FF0000) >> 16
         flags2 = self.flags & 0x0000FFFF
         pid_high = (self.pid & 0xFFFF0000) >> 16
         pid_low = self.pid & 0x0000FFFF
 
-        return b"".join(
+        return bytearray().join(
             [
                 self.protocol_id,
                 self.command.to_bytes(1, byteorder="little"),
@@ -223,7 +223,7 @@ class SMB2Header(SMBHeader):
         object.__setattr__(self, "session_id", session_id)
         object.__setattr__(self, "signature", signature)
 
-    def pack(self) -> bytes:
+    def pack(self) -> bytearray:
         status = self.status
         if self.channel_sequence:
             status = self.channel_sequence
@@ -235,7 +235,7 @@ class SMB2Header(SMBHeader):
         else:
             async_tree_id_field = b"\x00\x00\x00\x00" + self.tree_id.to_bytes(4, byteorder="little")
 
-        return b"".join(
+        return bytearray().join(
             [
                 self.protocol_id,
                 b"\x40\x00",  # StructureSize (64)
@@ -324,8 +324,8 @@ class TransformHeader(SMBHeader):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "session_id", session_id)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 self.protocol_id,
                 self.signature,

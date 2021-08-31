@@ -68,7 +68,7 @@ class NegotiateContext:
 
     context_type: ContextType
 
-    def pack(self) -> bytes:
+    def pack(self) -> bytearray:
         raise NotImplementedError()
 
     @classmethod
@@ -97,8 +97,8 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         object.__setattr__(self, "hash_algorithms", hash_algorithms)
         object.__setattr__(self, "salt", salt)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 len(self.hash_algorithms).to_bytes(2, byteorder="little"),
                 len(self.salt).to_bytes(2, byteorder="little"),
@@ -147,8 +147,8 @@ class EncryptionCapabilities(NegotiateContext):
         super().__init__(ContextType.ENCRYPTION_CAPABILITIES)
         object.__setattr__(self, "ciphers", ciphers)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 len(self.ciphers).to_bytes(2, byteorder="little"),
                 b"".join(c.value.to_bytes(2, byteorder="little") for c in self.ciphers),
@@ -191,8 +191,8 @@ class CompressionCapabilities(NegotiateContext):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "compression_algorithms", compression_algorithms)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 len(self.compression_algorithms).to_bytes(2, byteorder="little"),
                 b"\x00\x00",  # Padding
@@ -235,8 +235,8 @@ class NetnameNegotiate(NegotiateContext):
         super().__init__(ContextType.NETNAME_NEGOTIATE_CONTEXT_ID)
         object.__setattr__(self, "net_name", net_name)
 
-    def pack(self) -> bytes:
-        return self.net_name.encode("utf-16-le")
+    def pack(self) -> bytearray:
+        return bytearray(self.net_name.encode("utf-16-le"))
 
     @classmethod
     def unpack(
@@ -263,8 +263,8 @@ class TransportCapabilities(NegotiateContext):
         super().__init__(ContextType.TRANSPORT_CAPABILITIES)
         object.__setattr__(self, "flags", flags)
 
-    def pack(self) -> bytes:
-        return self.flags.value.to_bytes(4, byteorder="little")
+    def pack(self) -> bytearray:
+        return bytearray(self.flags.value.to_bytes(4, byteorder="little"))
 
     @classmethod
     def unpack(
@@ -292,8 +292,8 @@ class RdmaTransformCapabilities(NegotiateContext):
         super().__init__(ContextType.RDMA_TRANSFORM_CAPABILITIES)
         object.__setattr__(self, "rdma_transform_ids", rdma_transform_ids)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 len(self.rdma_transform_ids).to_bytes(2, byteorder="little"),
                 b"\x00\x00",  # Reserved1
@@ -335,8 +335,8 @@ class SigningCapabilities(NegotiateContext):
         super().__init__(ContextType.SIGNING_CAPABILITIES)
         object.__setattr__(self, "signing_algorithms", signing_algorithms)
 
-    def pack(self) -> bytes:
-        return b"".join(
+    def pack(self) -> bytearray:
+        return bytearray().join(
             [
                 len(self.signing_algorithms).to_bytes(2, byteorder="little"),
                 b"".join(a.value.to_bytes(2, byteorder="little") for a in self.signing_algorithms),
@@ -364,7 +364,7 @@ class SigningCapabilities(NegotiateContext):
 
 def pack_negotiate_context(
     context: NegotiateContext,
-) -> bytes:
+) -> bytearray:
     """Pack the Negotiate Context object.
 
     Packs the Negotiate Context object into bytes. The value is packed
@@ -381,7 +381,7 @@ def pack_negotiate_context(
     """
     context_data = context.pack()
 
-    return b"".join(
+    return bytearray().join(
         [
             context.context_type.to_bytes(2, byteorder="little"),
             len(context_data).to_bytes(2, byteorder="little"),

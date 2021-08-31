@@ -13,6 +13,7 @@ from hsmb._negotiate_contexts import (
     pack_negotiate_context,
     unpack_negotiate_context,
 )
+from hsmb._tree_contexts import TreeContext, pack_tree_context, unpack_tree_context
 
 
 class Command(enum.IntEnum):
@@ -77,6 +78,7 @@ class SessionFlags(enum.IntFlag):
 
 
 class TreeConnectFlags(enum.IntFlag):
+    NONE = 0x0000
     CLUSTER_RECONNECT = 0x0001
     REDIRECT_TO_OWNER = 0x0002
     EXTENSION_PRESENT = 0x0004
@@ -125,7 +127,7 @@ class SMBMessage:
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
+    ) -> bytearray:
         raise NotImplementedError()
 
     @classmethod
@@ -155,10 +157,10 @@ class SMB1NegotiateRequest(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
+    ) -> bytearray:
         dialects = b"".join([b"\x02" + d.encode() + b"\x00" for d in self.dialects])
 
-        return b"".join(
+        return bytearray().join(
             [
                 b"\x00",  # WordCount
                 len(dialects).to_bytes(2, byteorder="little"),
@@ -196,8 +198,8 @@ class SMB1NegotiateResponse(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"".join(
+    ) -> bytearray:
+        return bytearray().join(
             [
                 b"\x01",  # WordCount
                 self.selected_index.to_bytes(2, byteorder="little", signed=True),
@@ -247,7 +249,7 @@ class NegotiateRequest(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
+    ) -> bytearray:
         dialects = b"".join(d.to_bytes(2, byteorder="little") for d in self.dialects)
         negotiate_offset = 0
         padding_size = 0
@@ -267,7 +269,7 @@ class NegotiateRequest(SMBMessage):
                 if idx != last_idx and context_padding_size:
                     negotiate_contexts.append(b"\x00" * context_padding_size)
 
-        return b"".join(
+        return bytearray().join(
             [
                 b"\x24\x00",  # StructureSize(36)
                 len(self.dialects).to_bytes(2, byteorder="little"),
@@ -391,7 +393,7 @@ class NegotiateResponse(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
+    ) -> bytearray:
         sec_buffer = self.security_buffer or b""
         sec_buffer_offset = offset_from_header + 65
         negotiate_offset = 0
@@ -412,7 +414,7 @@ class NegotiateResponse(SMBMessage):
                 if idx != last_idx and context_padding_size:
                     negotiate_contexts.append(b"\x00" * context_padding_size)
 
-        return b"".join(
+        return bytearray().join(
             [
                 b"\x41\x00",  # StructureSize(65)
                 self.security_mode.value.to_bytes(2, byteorder="little"),
@@ -527,8 +529,8 @@ class SessionSetupRequest(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"".join(
+    ) -> bytearray:
+        return bytearray().join(
             [
                 b"\x19\x00",  # StructureSize(25)
                 self.flags.value.to_bytes(1, byteorder="little"),
@@ -593,8 +595,8 @@ class SessionSetupResponse(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"".join(
+    ) -> bytearray:
+        return bytearray().join(
             [
                 b"\x09\x00",  # StructureSize(9)
                 self.session_flags.value.to_bytes(2, byteorder="little"),
@@ -633,8 +635,8 @@ class LogoffRequest(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"\x04\x00\x00\x00"
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
 
     @classmethod
     def unpack(
@@ -662,8 +664,8 @@ class LogoffResponse(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"\x04\x00\x00\x00"
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
 
     @classmethod
     def unpack(
@@ -681,19 +683,112 @@ class LogoffResponse(SMBMessage):
 
 @dataclasses.dataclass(frozen=True)
 class TreeConnectRequest(SMBMessage):
-    __slots__ = ("flags", "path")
+    __slots__ = ("flags", "path", "tree_contexts")
 
     flags: TreeConnectFlags
     path: str
+    tree_contexts: typing.List[TreeContext]
 
     def __init__(
         self,
+        *,
         flags: TreeConnectFlags,
         path: str,
+        tree_contexts: typing.List[TreeContext],
     ) -> None:
         super().__init__(Command.TREE_CONNECT)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "path", path)
+        object.__setattr__(self, "tree_contexts", tree_contexts)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytearray:
+        b_path = self.path.encode("utf-16-le")
+
+        path_offset = offset_from_header + 8
+        extension_info = b""
+        padding_size = 0
+        tree_contexts = []
+
+        if self.flags & TreeConnectFlags.EXTENSION_PRESENT:
+            path_offset += 16
+            extension_offset = 24 + len(b_path)
+            padding_size = 8 - (extension_offset % 8 or 8)
+            extension_offset += padding_size
+
+            extension_info = b"".join(
+                [
+                    extension_offset.to_bytes(4, byteorder="little"),
+                    len(self.tree_contexts).to_bytes(2, byteorder="little"),
+                    b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",  # Reserved
+                ]
+            )
+
+            last_idx = len(self.tree_contexts) - 1
+            for idx, context in enumerate(self.tree_contexts):
+                context_data = pack_tree_context(context)
+                tree_contexts.append(context_data)
+
+                context_padding_size = 8 - (len(context_data) % 8 or 8)
+                if idx != last_idx and context_padding_size:
+                    tree_contexts.append(b"\x00" * context_padding_size)
+
+        return bytearray().join(
+            [
+                b"\x09\x00",
+                self.flags.value.to_bytes(2, byteorder="little"),
+                path_offset.to_bytes(2, byteorder="little"),
+                len(b_path).to_bytes(2, byteorder="little"),
+                extension_info,
+                b_path,
+                (b"\x00" * padding_size),
+                b"".join(tree_contexts),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["TreeConnectRequest", int]:
+        view = memoryview(data)[offset:]
+
+        flags = TreeConnectFlags(struct.unpack("<H", view[2:4])[0])
+        path_offset = struct.unpack("<H", view[4:6])[0] - offset_from_header
+        path_length = struct.unpack("<H", view[6:8])[0]
+        path_name = bytes(view[path_offset : path_offset + path_length]).decode("utf-16-le")
+        end_idx = path_offset + path_length
+
+        contexts: typing.List[TreeContext] = []
+        if flags & TreeConnectFlags.EXTENSION_PRESENT:
+            context_offset = struct.unpack("<I", view[8:12])[0]
+            context_count = struct.unpack("<H", view[12:14])[0]
+
+            if context_count:
+                end_idx = context_offset
+
+                for idx in range(context_count):
+                    ctx, offset = unpack_tree_context(view[end_idx:])
+                    contexts.append(ctx)
+
+                    if idx != context_count - 1:
+                        # Adjust for padding
+                        offset += 8 - (offset % 8 or 8)
+
+                    end_idx += offset
+
+        return (
+            TreeConnectRequest(
+                flags=flags,
+                path=path_name,
+                tree_contexts=contexts,
+            ),
+            end_idx,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -707,6 +802,7 @@ class TreeConnectResponse(SMBMessage):
 
     def __init__(
         self,
+        *,
         share_type: ShareType,
         share_flags: ShareFlags,
         capabilities: ShareCapabilities,
@@ -717,6 +813,45 @@ class TreeConnectResponse(SMBMessage):
         object.__setattr__(self, "share_flags", share_flags)
         object.__setattr__(self, "capabilities", capabilities)
         object.__setattr__(self, "maximal_access", maximal_access)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytearray:
+        return bytearray().join(
+            [
+                b"\x10\x00",
+                self.share_type.value.to_bytes(1, byteorder="little"),
+                b"\x00",  # Reserved
+                self.share_flags.value.to_bytes(4, byteorder="little"),
+                self.capabilities.value.to_bytes(4, byteorder="little"),
+                self.maximal_access.to_bytes(4, byteorder="little"),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["TreeConnectResponse", int]:
+        view = memoryview(data)[offset:]
+
+        share_type = ShareType(struct.unpack("<B", view[2:3])[0])
+        share_flags = ShareFlags(struct.unpack("<I", view[4:8])[0])
+        capabilities = ShareCapabilities(struct.unpack("<I", view[8:12])[0])
+        maximal_access = struct.unpack("<I", view[12:16])[0]
+
+        return (
+            TreeConnectResponse(
+                share_type=share_type,
+                share_flags=share_flags,
+                capabilities=capabilities,
+                maximal_access=maximal_access,
+            ),
+            16,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -731,8 +866,8 @@ class TreeDisconnectRequest(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"\x04\x00\x00\x00"
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
 
     @classmethod
     def unpack(
@@ -760,8 +895,8 @@ class TreeDisconnectResponse(SMBMessage):
     def pack(
         self,
         offset_from_header: int,
-    ) -> bytes:
-        return b"\x04\x00\x00\x00"
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
 
     @classmethod
     def unpack(

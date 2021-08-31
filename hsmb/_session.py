@@ -2,14 +2,7 @@
 # Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
-import hashlib
-import hmac
 import typing
-
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import cmac, hashes
-from cryptography.hazmat.primitives.ciphers import algorithms
-from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC, CounterLocation, Mode
 
 from hsmb._connection import PendingRequest, SMBClientConnection
 from hsmb._crypto import smb3kdf
@@ -28,6 +21,9 @@ from hsmb._messages import (
 )
 from hsmb._negotiate_contexts import Cipher
 
+if typing.TYPE_CHECKING:
+    from hsmb._tree import SMBClientTree
+
 
 class SMBClientSession:
     def __init__(
@@ -35,7 +31,7 @@ class SMBClientSession:
         connection: SMBClientConnection,
     ) -> None:
         self.session_id = 0
-        self.tree_connect_table: typing.Dict[int, typing.Any] = {}
+        self.tree_connect_table: typing.Dict[int, "SMBClientTree"] = {}
         self.session_key: typing.Optional[bytes] = None
         self.signing_required = False
         self.connection = connection

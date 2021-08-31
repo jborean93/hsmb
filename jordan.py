@@ -50,13 +50,13 @@ class TcpConnection:
 
 
 async def main() -> None:
-    # server = "127.0.0.1"
-    # username = "smbuser"
-    # password = "smbpass"
+    server = "127.0.0.1"
+    username = "smbuser"
+    password = "smbpass"
 
-    server = "server2022.domain.test"
-    username = "vagrant-domain@DOMAIN.TEST"
-    password = "VagrantPass1"
+    # server = "server2022.domain.test"
+    # username = "vagrant-domain@DOMAIN.TEST"
+    # password = "VagrantPass1"
 
     async with TcpConnection(server, 445) as tcp:
         conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), server)
@@ -87,11 +87,16 @@ async def main() -> None:
                     if event.require_session_key:
                         session.set_session_key(auth.session_key)
 
+            conn.tree_connect(session, f"\\\\{server}\\share")
+            await tcp.send(conn.data_to_send())
+            conn.receive_data(await tcp.recv())
+            event = conn.next_event()
+            conn.tree_disconnect(list(session.tree_connect_table.values())[0])
+            a = ""
+
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
         conn.next_event()
-
-        a = ""
 
 
 if __name__ == "__main__":

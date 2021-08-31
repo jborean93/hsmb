@@ -252,3 +252,68 @@ class SMBServerConfig(SMBConfig):
     max_cluster_dialect: Dialect = Dialect.SMB311
     supports_tree_connect_extn: bool = False
     allow_named_pipe_access_over_quic: bool = False
+
+
+@dataclasses.dataclass
+class ClientSession:
+    session_id: int
+    tree_connect_table: typing.Dict[int, "ClientTreeConnect"]
+    session_key: bytes
+    signing_required: bool
+    connection: "SMBClientConnection"
+    open_table: typing.Dict[int, typing.Any]
+    is_anonymous: bool
+    is_guest: bool
+    channel_list: typing.Dict[int, typing.Any]
+    channel_sequence: int
+    encrypt_data: bool
+    encryption_key: bytes
+    decryption_key: bytes
+    signing_key: bytes
+    application_key: bytes
+    preauth_integrity_hash_value: bytes
+    full_session_key: bytes
+
+
+@dataclasses.dataclass
+class ClientTreeConnect:
+    share_name: str
+    tree_connect_id: int
+    session: ClientSession
+    is_dfs_share: bool
+    is_ca_share: bool
+    encrypt_data: bool
+    is_scaleout_share: bool
+    compress_data: bool
+
+
+@dataclasses.dataclass
+class ClientOpenFile:
+    open_table: typing.Any
+    lease_key: bytes
+    lease_state: typing.Any
+    lease_epoch: int
+
+
+@dataclasses.dataclass
+class ClientApplicationOpenFile:
+    file_id: int
+    tree_connect: ClientTreeConnect
+    connection: "SMBClientConnection"
+    session: ClientSession
+    oplock_level: int
+    durable: bool
+    file_name: str
+    resiliant_handle: bool
+    last_disconnect_time: int
+    resilient_timeout: int
+    operation_bucket: typing.List
+    desired_access: int
+    share_mode: int
+    create_options: int
+    file_attributes: int
+    create_disposition: int
+    durable_timeout: int
+    outstanding_requests: typing.Dict
+    create_guid: uuid.UUID
+    is_persistent: bool

@@ -18,6 +18,7 @@ from hsmb._negotiate_contexts import (
     PreauthIntegrityCapabilities,
 )
 from hsmb._session import SMBClientSession
+from hsmb._tree import SMBClientTree
 
 __all__ = [
     "Capabilities",
@@ -41,6 +42,7 @@ __all__ = [
     "SMBClientConfig",
     "SMBClientConnection",
     "SMBClientSession",
+    "SMBClientTree",
     "SMBRole",
     "SMBServerConfig",
     "unpack_header",

@@ -12,6 +12,8 @@ import uuid
 
 from hsmb._config import (
     ClientServer,
+    ClientSession,
+    ClientTreeConnect,
     SMBClientConfig,
     SMBConfig,
     SMBRole,
@@ -37,12 +39,26 @@ from hsmb._messages import (
     Capabilities,
     Command,
     Dialect,
+    LogoffRequest,
+    LogoffResponse,
     NegotiateRequest,
     NegotiateResponse,
     SecurityModes,
+    SessionFlags,
+    SessionSetupFlags,
+    SessionSetupRequest,
+    SessionSetupResponse,
+    ShareCapabilities,
+    ShareFlags,
+    ShareType,
     SMB1NegotiateRequest,
     SMB1NegotiateResponse,
     SMBMessage,
+    TreeConnectFlags,
+    TreeConnectRequest,
+    TreeConnectResponse,
+    TreeDisconnectRequest,
+    TreeDisconnectResponse,
 )
 from hsmb._negotiate_contexts import (
     CipherBase,
@@ -62,6 +78,7 @@ from hsmb._negotiate_contexts import (
     TransportCapabilities,
     TransportCapabilityFlags,
 )
+from hsmb._tree_contexts import TreeContext
 
 if typing.TYPE_CHECKING:
     from hsmb._session import SMBClientSession
@@ -100,8 +117,8 @@ class SMBClientConnection:
 
         self.transport_identifier = transport_identifier
 
-        self.session_table: typing.Dict[int, "SMBClientSession"] = {}
-        self.preauth_session_table: typing.Dict[int, "SMBClientSession"] = {}
+        self.session_table: typing.Dict[int, ClientSession] = {}
+        self.preauth_session_table: typing.Dict[int, ClientSession] = {}
         self.outstanding_requests: typing.Dict[int, PendingRequest] = {}
         self.sequence_window: typing.List[typing.Tuple[int, int]] = [(0, 1)]
         self.gss_negotiate_token: typing.Optional[bytes] = None
@@ -234,7 +251,7 @@ class SMBClientConnection:
         )
         self.outstanding_requests[message_id] = PendingRequest(message=message, receive_callback=callback)
 
-        raw_data = bytearray(header.pack())
+        raw_data = header.pack()
         raw_data += message.pack(len(raw_data))
 
         if flags & HeaderFlags.SIGNED:
@@ -557,6 +574,118 @@ class SMBClientConnection:
             # has been negotiated.
             new_hash = self.preauth_integrity_hash_id.hash((b"\x00" * 64) + self.preauth_integrity_hash_value)
             self.preauth_integrity_hash_value = self.preauth_integrity_hash_id.hash(new_hash + bytes(raw))
+
+    def session_setup(
+        self,
+        security_buffer: bytes,
+        session_id: int = 0,
+    ) -> None:
+        if session_id:
+            session = self.preauth_session_table[session_id]
+        else:
+            session = ClientSession(
+                session_id=0,
+                tree_connect_table={},
+                session_key=b"",
+                signing_required=False,
+                connection=self,
+                open_table={},
+                is_anonymous=False,
+                is_guest=False,
+                channel_list={},
+                channel_sequence=0,
+                encrypt_data=False,
+                encryption_key=b"",
+                decryption_key=b"",
+                signing_key=b"",
+                application_key=b"",
+                preauth_integrity_hash_value=b"",
+                full_session_key=b"",
+            )
+
+        def _process(
+            header: SMB2Header,
+            message: SessionSetupResponse,
+            raw: memoryview,
+        ) -> typing.Optional[Event]:
+            return None
+
+        security_mode = (
+            SecurityModes.SIGNING_REQUIRED if self.config.require_message_signing else SecurityModes.SIGNING_ENABLED
+        )
+        req = SessionSetupRequest(
+            flags=SessionSetupFlags.NONE,
+            security_mode=security_mode,
+            capabilities=Capabilities.DFS,
+            channel=0,
+            previous_session_id=0,
+            security_buffer=security_buffer,
+        )
+        send_view = self.send(req, session_id=session.session_id, callback=_process)
+
+        if self.preauth_integrity_hash_id:
+            session.preauth_integrity_hash_value = self.preauth_integrity_hash_id.hash(
+                self.preauth_integrity_hash_value + bytes(send_view)
+            )
+
+    def tree_connect(
+        self,
+        session: "SMBClientSession",
+        path: str,
+        contexts: typing.Optional[typing.List[TreeContext]] = None,
+    ) -> None:
+        def _process(
+            header: SMB2Header,
+            message: TreeConnectResponse,
+            raw: memoryview,
+        ) -> typing.Optional[Event]:
+            if header.status == 0xC05D0001:
+                raise Exception("STATUS_SMB_BAD_CLUSTER_DIALECT")
+
+            if header.status == 0:
+                # self.share_name = "share name from path passed in"
+
+                # self.session.tree_connect_table[self.tree_connect_id] = self
+
+                tree_connect = ClientTreeConnect(
+                    share_name="share",
+                    tree_connect_id=header.tree_id,
+                    session=session,
+                    is_dfs_share=bool(message.share_flags & ShareFlags.DFS),
+                    is_ca_share=bool(message.capabilities & ShareCapabilities.CONTINUOUS_AVAILABILITY),
+                    encrypt_data=bool(message.share_flags & ShareFlags.ENCRYPT_DATA),
+                    is_scaleout_share=False,
+                    compress_data=bool(message.share_flags & ShareFlags.COMPRESS_DATA),
+                )
+                session.tree_connect_table[header.tree_id] = tree_connect
+
+            return None
+
+        flags = TreeConnectFlags.NONE
+        if contexts:
+            flags |= TreeConnectFlags.EXTENSION_PRESENT
+
+        self.send(
+            TreeConnectRequest(flags=flags, path=path, tree_contexts=contexts or []),
+            session_id=session.session_id,
+            callback=_process,
+        )
+
+    def tree_disconnect(
+        self,
+        tree: ClientTreeConnect,
+    ) -> None:
+        def _process(
+            header: SMB2Header,
+            message: TreeDisconnectResponse,
+            raw: memoryview,
+        ) -> typing.Optional[Event]:
+            if header.status != 0:
+                raise Exception("Invalid status")
+
+            del tree.session.tree_connect_table[tree.tree_connect_id]
+
+        self.send(TreeDisconnectRequest(), session_id=tree.session.session_id, tree_id=tree.tree_connect_id)
 
 
 """
