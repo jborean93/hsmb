@@ -59,40 +59,43 @@ async def main() -> None:
     # password = "VagrantPass1"
 
     async with TcpConnection(server, 445) as tcp:
-        conn = hsmb.SMBClientConnection(hsmb.SMBClientConfig(), server)
-        conn.open()
+        conn = hsmb.SMBClient(hsmb.ClientConfig())
+        conn.negotiate(server)
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
-        conn.next_event()
+        protocol_negotiated = conn.next_event()
+        assert isinstance(protocol_negotiated, hsmb.ProtocolNegotiated)
 
         auth = spnego.client(username, password)
-        token = auth.step(conn.gss_negotiate_token)
+        token = auth.step(protocol_negotiated.token)
 
-        with hsmb.SMBClientSession(conn) as session:
-            while not auth.complete:
-                event = conn.next_event()
+        conn.session_setup(token)
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        event = conn.next_event()
+        assert isinstance(event, hsmb.SessionProcessingRequired)
 
-                if not event:
-                    session.open(token)
+        token = auth.step(event.token)
 
-                    await tcp.send(conn.data_to_send())
-                    conn.receive_data(await tcp.recv())
-                    continue
+        conn.session_setup(token, session_id=event.session_id)
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        event = conn.next_event()
+        assert isinstance(event, hsmb.SessionAuthenticated)
 
-                if isinstance(event, hsmb.SecurityTokenReceived):
-                    if event.token:
-                        token = auth.step(event.token)
+        conn.set_session_key(auth.session_key, event)
 
-                    if event.require_session_key:
-                        session.set_session_key(auth.session_key)
+        conn.tree_connect(session, f"\\\\{server}\\share")
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        event = conn.next_event()
 
-            conn.tree_connect(session, f"\\\\{server}\\share")
-            await tcp.send(conn.data_to_send())
-            conn.receive_data(await tcp.recv())
-            event = conn.next_event()
-            conn.tree_disconnect(list(session.tree_connect_table.values())[0])
-            a = ""
+        conn.tree_disconnect(list(session.tree_connect_table.values())[0])
+        await tcp.send(conn.data_to_send())
+        conn.receive_data(await tcp.recv())
+        event = conn.next_event()
+        a = ""
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())

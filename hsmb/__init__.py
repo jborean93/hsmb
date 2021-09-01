@@ -1,7 +1,13 @@
-from hsmb._config import SMBClientConfig, SMBRole, SMBServerConfig
-from hsmb._connection import SMBClientConnection
-from hsmb._events import Event, RequestReceived, ResponseReceived, SecurityTokenReceived
-from hsmb._headers import SMB1Header, SMB1HeaderFlags, SMB2Header, unpack_header
+from hsmb._client import ClientConfig
+from hsmb._config import SMBRole, SMBServerConfig
+from hsmb._connection import SMBClient
+from hsmb._events import (
+    Event,
+    ProtocolNegotiated,
+    SessionAuthenticated,
+    SessionProcessingRequired,
+)
+from hsmb._headers import SMB1Header, SMB1HeaderFlags, SMB2Header
 from hsmb._messages import (
     Capabilities,
     Dialect,
@@ -17,12 +23,11 @@ from hsmb._negotiate_contexts import (
     HashAlgorithm,
     PreauthIntegrityCapabilities,
 )
-from hsmb._session import SMBClientSession
-from hsmb._tree import SMBClientTree
 
 __all__ = [
     "Capabilities",
     "Cipher",
+    "ClientConfig",
     "Dialect",
     "EncryptionCapabilities",
     "Event",
@@ -30,20 +35,16 @@ __all__ = [
     "NegotiateRequest",
     "NegotiateResponse",
     "PreauthIntegrityCapabilities",
-    "RequestReceived",
-    "ResponseReceived",
+    "ProtocolNegotiated",
     "SecurityModes",
-    "SecurityTokenReceived",
+    "SessionAuthenticated",
+    "SessionProcessingRequired",
     "SMB1Header",
     "SMB1HeaderFlags",
     "SMB1NegotiateRequest",
     "SMB1NegotiateResponse",
     "SMB2Header",
-    "SMBClientConfig",
-    "SMBClientConnection",
-    "SMBClientSession",
-    "SMBClientTree",
+    "SMBClient",
     "SMBRole",
     "SMBServerConfig",
-    "unpack_header",
 ]
