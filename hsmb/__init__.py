@@ -6,6 +6,7 @@ from hsmb._events import (
     ProtocolNegotiated,
     SessionAuthenticated,
     SessionProcessingRequired,
+    TreeConnected,
 )
 from hsmb._headers import SMB1Header, SMB1HeaderFlags, SMB2Header
 from hsmb._messages import (
@@ -47,4 +48,5 @@ __all__ = [
     "SMBClient",
     "SMBRole",
     "SMBServerConfig",
+    "TreeConnected",
 ]

@@ -2,9 +2,6 @@
 # Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
-import base64
-import dataclasses
-import datetime
 import enum
 import os
 import typing
@@ -31,6 +28,7 @@ from hsmb._events import (
     ProtocolNegotiated,
     SessionAuthenticated,
     SessionProcessingRequired,
+    TreeConnected,
 )
 from hsmb._headers import (
     HeaderFlags,
@@ -548,36 +546,53 @@ class SMBClient:
 
         self.connection.session_table[event.session_id] = self.connection.preauth_session_table.pop(event.session_id)
 
+    def logoff(
+        self,
+        session_id: int,
+    ) -> None:
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
+
+        session = self.connection.session_table.get(session_id, None)
+        if not session:
+            raise Exception(f"No session matches {session_id}")
+
+        def process(
+            header: SMB2Header,
+            message: SMBMessage,
+            raw: memoryview,
+            state: typing.Dict[str, typing.Any],
+        ) -> typing.Optional[Event]:
+            if header.status != 0:
+                raise Exception(f"Received error status {header.status:8X}")
+
+            session = typing.cast(ClientSession, state["session"])
+            del session.connection.session_table[session.session_id]
+            return None
+
+        self.send(
+            LogoffRequest(),
+            session_id=session_id,
+            callback=process,
+            callback_state={"session": session},
+        )
+
     def tree_connect(
         self,
-        session: "SMBClientSession",
+        session_id: int,
         path: str,
         contexts: typing.Optional[typing.List[TreeContext]] = None,
     ) -> None:
-        def _process(
-            header: SMB2Header,
-            message: TreeConnectResponse,
-            raw: memoryview,
-        ) -> typing.Optional[Event]:
-            if header.status == 0xC05D0001:
-                raise Exception("STATUS_SMB_BAD_CLUSTER_DIALECT")
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
 
-            if header.status == 0:
-                # self.share_name = "share name from path passed in"
+        session = self.connection.session_table.get(session_id, None)
+        if not session:
+            raise Exception("No authenticated session")
 
-                tree_connect = ClientTreeConnect(
-                    share_name="share",
-                    tree_connect_id=header.tree_id,
-                    session=session,
-                    is_dfs_share=bool(message.share_flags & ShareFlags.DFS),
-                    is_ca_share=bool(message.capabilities & ShareCapabilities.CONTINUOUS_AVAILABILITY),
-                    encrypt_data=bool(message.share_flags & ShareFlags.ENCRYPT_DATA),
-                    is_scaleout_share=False,
-                    compress_data=bool(message.share_flags & ShareFlags.COMPRESS_DATA),
-                )
-                session.tree_connect_table[header.tree_id] = tree_connect
-
-            return None
+        path_components = [p for p in path.split("\\") if p]
+        if len(path_components) != 2:
+            raise Exception("Expecting share path in the format \\\\server\\share")
 
         flags = TreeConnectFlags.NONE
         if contexts:
@@ -586,27 +601,46 @@ class SMBClient:
         self.send(
             TreeConnectRequest(flags=flags, path=path, tree_contexts=contexts or []),
             session_id=session.session_id,
-            callback=_process,
+            callback=_process_tree_connect_response,
+            callback_state={"session": session, "share_name": path_components[1]},
         )
 
     def tree_disconnect(
         self,
-        tree: ClientTreeConnect,
+        session_id: int,
+        tree_id: int,
     ) -> None:
-        def _process(
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
+
+        session = self.connection.session_table.get(session_id, None)
+        if not session:
+            raise Exception("Could not find session")
+
+        tree = session.tree_connect_table.get(tree_id, None)
+        if not tree:
+            raise Exception("Could not find tree")
+
+        def process(
             header: SMB2Header,
-            message: TreeDisconnectResponse,
+            message: SMBMessage,
             raw: memoryview,
+            state: typing.Dict[str, typing.Any],
         ) -> typing.Optional[Event]:
             if header.status != 0:
                 raise Exception("Invalid status")
 
+            tree = typing.cast(ClientTreeConnect, state["tree"])
             del tree.session.tree_connect_table[tree.tree_connect_id]
 
             return None
 
         self.send(
-            TreeDisconnectRequest(), session_id=tree.session.session_id, tree_id=tree.tree_connect_id, callback=_process
+            TreeDisconnectRequest(),
+            session_id=tree.session.session_id,
+            tree_id=tree.tree_connect_id,
+            callback=process,
+            callback_state={"tree": tree},
         )
 
 
@@ -790,6 +824,39 @@ def _process_session_setup_response(
 
     else:
         raise Exception(f"Received error during sessions setup 0x{header.status:8X}")
+
+
+def _process_tree_connect_response(
+    header: SMB2Header,
+    message: SMBMessage,
+    raw: memoryview,
+    state: typing.Dict[str, typing.Any],
+) -> typing.Optional[Event]:
+    message = typing.cast(TreeConnectResponse, message)
+
+    session = typing.cast(ClientSession, state["session"])
+    share_name = typing.cast(str, state["share_name"])
+
+    if header.status == 0xC05D0001:
+        raise Exception("STATUS_SMB_BAD_CLUSTER_DIALECT")
+
+    if header.status == 0:
+        tree_connect = ClientTreeConnect(
+            share_name=share_name,
+            tree_connect_id=header.tree_id,
+            session=session,
+            is_dfs_share=bool(message.share_flags & ShareFlags.DFS),
+            is_ca_share=bool(message.capabilities & ShareCapabilities.CONTINUOUS_AVAILABILITY),
+            encrypt_data=bool(message.share_flags & ShareFlags.ENCRYPT_DATA),
+            is_scaleout_share=False,
+            compress_data=bool(message.share_flags & ShareFlags.COMPRESS_DATA),
+        )
+        session.tree_connect_table[header.tree_id] = tree_connect
+
+        return TreeConnected(header, message, tree_connect)
+
+    else:
+        raise Exception(f"Error status {header.status:8X}")
 
 
 """

@@ -86,20 +86,29 @@ async def main() -> None:
 
         conn.set_session_key(auth.session_key, event)
 
-        conn.tree_connect(session, f"\\\\{server}\\share")
-        await tcp.send(conn.data_to_send())
-        conn.receive_data(await tcp.recv())
-        event = conn.next_event()
+        session_id = event.session_id
+        try:
+            conn.tree_connect(session_id, f"\\\\{server}\\share")
+            await tcp.send(conn.data_to_send())
+            conn.receive_data(await tcp.recv())
+            event = conn.next_event()
+            assert isinstance(event, hsmb.TreeConnected)
 
-        conn.tree_disconnect(list(session.tree_connect_table.values())[0])
-        await tcp.send(conn.data_to_send())
-        conn.receive_data(await tcp.recv())
-        event = conn.next_event()
-        a = ""
+            tree_id = event.tree.tree_connect_id
+            try:
+                a = ""
 
-        await tcp.send(conn.data_to_send())
-        conn.receive_data(await tcp.recv())
-        conn.next_event()
+            finally:
+                conn.tree_disconnect(session_id, tree_id)
+                await tcp.send(conn.data_to_send())
+                conn.receive_data(await tcp.recv())
+                event = conn.next_event()
+
+        finally:
+            conn.logoff(session_id)
+            await tcp.send(conn.data_to_send())
+            conn.receive_data(await tcp.recv())
+            event = conn.next_event()
 
 
 if __name__ == "__main__":
