@@ -10,7 +10,7 @@ import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import MESSAGES, Command, SMB2Header, SMBMessage, TransformHeader
+from hsmb._messages import Command, SMB2Header, SMBMessage, TransformHeader
 
 
 class ContextType(enum.IntEnum):
@@ -904,7 +904,3 @@ def unpack_negotiate_context(
         raise MalformedPacket(f"Unknown negotiate context type {context_type}")
 
     return context_cls.unpack(context_data), 8 + context_length
-
-
-MESSAGES[Command.SMB1_NEGOTIATE] = (SMB1NegotiateRequest, SMB1NegotiateResponse)
-MESSAGES[Command.NEGOTIATE] = (NegotiateRequest, NegotiateResponse)

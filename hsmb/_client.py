@@ -10,6 +10,7 @@ import uuid
 
 from hsmb._config import SMBConfig, SMBRole, TransportIdentifier
 from hsmb._create import (
+    CloseFlags,
     CloseRequest,
     CloseResponse,
     CreateDisposition,
@@ -28,6 +29,7 @@ from hsmb._crypto import (
 )
 from hsmb._events import (
     Event,
+    FileOpened,
     MessageReceived,
     ProtocolNegotiated,
     SessionAuthenticated,
@@ -42,7 +44,6 @@ from hsmb._ioctl import (
     ValidateNegotiateInfoResponse,
 )
 from hsmb._messages import (
-    MESSAGES,
     Command,
     HeaderFlags,
     SMB1Header,
@@ -201,10 +202,10 @@ class ClientSession:
     tree_connect_table: typing.Dict[int, "ClientTreeConnect"] = dataclasses.field(default_factory=dict)
     session_key: bytes = b""
     signing_required: bool = False
-    open_table: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    open_table: typing.Dict[bytes, "ClientApplicationOpenFile"] = dataclasses.field(default_factory=dict)
     is_anonymous: bool = False
     is_guest: bool = False
-    channel_list: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    channel_list: typing.Dict[int, "ClientChannel"] = dataclasses.field(default_factory=dict)
     channel_sequence: int = 0
     encrypt_data: bool = False
     encryption_key: bytes = b""
@@ -238,7 +239,7 @@ class ClientOpenFile:
 
 @dataclasses.dataclass
 class ClientApplicationOpenFile:
-    file_id: int
+    file_id: bytes
     tree_connect: ClientTreeConnect
     connection: ClientConnection
     session: ClientSession
@@ -250,10 +251,10 @@ class ClientApplicationOpenFile:
     resilient_timeout: int
     operation_bucket: typing.List
     desired_access: int
-    share_mode: int
-    create_options: int
+    share_mode: ShareAccess
+    create_options: CreateOptions
     file_attributes: int
-    create_disposition: int
+    create_disposition: CreateDisposition
     durable_timeout: int
     outstanding_requests: typing.Dict
     create_guid: uuid.UUID
@@ -367,7 +368,7 @@ class SMBClient:
         tree_id: int = 0,
         final: bool = True,
         must_sign: bool = False,
-    ) -> memoryview:
+    ) -> int:
         if not self.connection:
             raise Exception("Cannot send any message without a negotiated connection")
 
@@ -474,10 +475,8 @@ class SMBClient:
 
             raw_data = bytearray(self.connection.cipher_id.encrypt(session.encryption_key, header, bytes(raw_data)))
 
-        offset = len(self._data_to_send)
         self._data_to_send += raw_data
-
-        return memoryview(self._data_to_send)[offset : len(raw_data)]
+        return message_id
 
     def data_to_send(
         self,
@@ -567,7 +566,7 @@ class SMBClient:
         server_name: str,
         offered_dialects: typing.Optional[typing.List[Dialect]] = None,
         transport_identifier: TransportIdentifier = TransportIdentifier.UNKNOWN,
-    ) -> None:
+    ) -> int:
         if self.connection:
             raise Exception("Connection has already been negotiated")
 
@@ -677,15 +676,21 @@ class SMBClient:
             "requested_compressors": requested_compressors,
             "requested_signers": requested_signers,
         }
-        send_view = self.send(msg, callback=_process_negotiate_response, callback_state=callback_state)
-        connection.preauth_integrity_hash_value = bytes(send_view)
+
+        offset = len(self._data_to_send)
+        message_id = self.send(msg, callback=_process_negotiate_response, callback_state=callback_state)
+
+        if highest_dialect >= Dialect.SMB311:
+            connection.preauth_integrity_hash_value = bytes(self._data_to_send[offset:])
+
+        return message_id
 
     def session_setup(
         self,
         security_buffer: bytes,
         session_id: int = 0,
         previous_session_id: int = 0,
-    ) -> None:
+    ) -> int:
         if not self.connection:
             raise Exception("No connection has been negotiated")
 
@@ -712,7 +717,9 @@ class SMBClient:
         callback_state = {
             "session": session,
         }
-        send_view = self.send(
+
+        offset = len(self._data_to_send)
+        message_id = self.send(
             req,
             session_id=session.session_id,
             callback=_process_session_setup_response,
@@ -722,8 +729,10 @@ class SMBClient:
         if self.connection.preauth_integrity_hash_id:
             pre_hash = session.preauth_integrity_hash_value or self.connection.preauth_integrity_hash_value
             session.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
-                pre_hash + bytes(send_view)
+                pre_hash + bytes(self._data_to_send[offset:])
             )
+
+        return message_id
 
     def set_session_key(
         self,
@@ -794,7 +803,7 @@ class SMBClient:
     def logoff(
         self,
         session_id: int,
-    ) -> None:
+    ) -> int:
         if not self.connection:
             raise Exception("No connection has been negotiated")
 
@@ -817,7 +826,7 @@ class SMBClient:
 
             return MessageReceived(header, message)
 
-        self.send(
+        return self.send(
             LogoffRequest(),
             session_id=session_id,
             callback=process,
@@ -829,7 +838,7 @@ class SMBClient:
         session_id: int,
         path: str,
         contexts: typing.Optional[typing.List[TreeContext]] = None,
-    ) -> None:
+    ) -> int:
         if not self.connection:
             raise Exception("No connection has been negotiated")
 
@@ -845,7 +854,7 @@ class SMBClient:
         if contexts:
             flags |= TreeConnectFlags.EXTENSION_PRESENT
 
-        self.send(
+        return self.send(
             TreeConnectRequest(flags=flags, path=path, tree_contexts=contexts or []),
             session_id=session.session_id,
             callback=_process_tree_connect_response,
@@ -862,7 +871,7 @@ class SMBClient:
         self,
         session_id: int,
         tree_id: int,
-    ) -> None:
+    ) -> int:
         if not self.connection:
             raise Exception("No connection has been negotiated")
 
@@ -889,7 +898,7 @@ class SMBClient:
 
             return MessageReceived(header, message)
 
-        self.send(
+        return self.send(
             TreeDisconnectRequest(),
             session_id=tree.session.session_id,
             tree_id=tree.tree_connect_id,
@@ -909,7 +918,7 @@ class SMBClient:
         share_access: ShareAccess = ShareAccess.NONE,
         create_options: CreateOptions = CreateOptions.NONE,
         oplock_level: RequestedOplockLevel = RequestedOplockLevel.NONE,
-    ) -> None:
+    ) -> int:
         if not self.connection:
             raise Exception("No connection has been negotiated")
 
@@ -931,12 +940,61 @@ class SMBClient:
             create_options=create_options,
             name=name,
         )
-        self.send(req, session_id=session_id, tree_id=tree_id, callback=_process_create_response, callback_state={})
+        return self.send(
+            req,
+            session_id=session_id,
+            tree_id=tree_id,
+            callback=_process_create_response,
+            callback_state={
+                "tree": tree,
+                "request": req,
+            },
+        )
 
     def close(
         self,
-    ) -> None:
-        a = ""
+        file_id: bytes,
+        session_id: int,
+        query_attrib: bool = False,
+    ) -> int:
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
+
+        session = self.connection.session_table.get(session_id, None)
+        if not session:
+            raise Exception("Could not find session")
+
+        open = session.open_table.get(file_id, None)
+        if not open:
+            raise Exception("Could not find file")
+
+        def process(
+            header: SMB2Header,
+            raw: memoryview,
+            message_offset: int,
+            state: typing.Dict[str, typing.Any],
+        ) -> Event:
+            if header.status != 0:
+                raise unpack_error_response(header, raw, message_offset)[0]
+
+            message = CloseResponse.unpack(raw, message_offset, message_offset)[0]
+            session = typing.cast(ClientSession, state["session"])
+            file_id = typing.cast(bytes, state["file_id"])
+            del session.open_table[file_id]
+
+            return MessageReceived(header, message)
+
+        flags = CloseFlags.NONE
+        if query_attrib:
+            flags |= CloseFlags.POSTQUERY_ATTRIB
+
+        return self.send(
+            CloseRequest(flags=flags, file_id=file_id),
+            session_id=session.session_id,
+            tree_id=open.tree_connect.tree_connect_id,
+            callback=process,
+            callback_state={"session": session, "file_id": file_id},
+        )
 
 
 def _process_negotiate_response(
@@ -1239,5 +1297,34 @@ def _process_create_response(
         raise unpack_error_response(header, raw, message_offset)[0]
 
     message = CreateResponse.unpack(raw, message_offset, message_offset)[0]
+    tree = typing.cast(ClientTreeConnect, state["tree"])
+    session = tree.session
+    request = typing.cast(CreateRequest, state["request"])
 
-    raise NotImplementedError()
+    file_name = request.name if tree.is_dfs_share else f"{session.connection.server_name}\\{request.name}"
+    open = ClientApplicationOpenFile(
+        file_id=message.file_id,
+        tree_connect=tree,
+        connection=session.connection,
+        session=session,
+        oplock_level=message.oplock_level,
+        durable=False,
+        resiliant_handle=False,
+        last_disconnect_time=0,
+        desired_access=request.desired_access,
+        share_mode=request.share_access,
+        create_options=request.create_options,
+        file_attributes=request.file_attributes,
+        create_disposition=request.create_disposition,
+        file_name=file_name,
+        # Find out what these default should be
+        resilient_timeout=0,
+        operation_bucket=[],
+        durable_timeout=0,
+        outstanding_requests={},
+        create_guid=uuid.UUID(int=0),
+        is_persistent=False,
+    )
+    session.open_table[message.file_id] = open
+
+    return FileOpened(header, message, open)

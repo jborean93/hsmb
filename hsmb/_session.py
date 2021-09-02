@@ -8,7 +8,7 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import MESSAGES, Command, SMBMessage
+from hsmb._messages import Command, SMBMessage
 from hsmb._negotiate import Capabilities, SecurityModes
 
 
@@ -217,7 +217,3 @@ class LogoffResponse(SMBMessage):
             raise MalformedPacket("Logoff response payload is too small")
 
         return LogoffResponse(), 4
-
-
-MESSAGES[Command.SESSION_SETUP] = (SessionSetupRequest, SessionSetupResponse)
-MESSAGES[Command.LOGOFF] = (LogoffRequest, LogoffResponse)

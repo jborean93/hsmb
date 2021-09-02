@@ -9,7 +9,7 @@ import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import MESSAGES, Command, SMBMessage
+from hsmb._messages import Command, SMBMessage
 from hsmb._negotiate import Capabilities, Dialect, SecurityModes
 
 
@@ -395,6 +395,3 @@ class IOCTLResponse(SMBMessage):
             ),
             49 + max(output_end, input_end),
         )
-
-
-MESSAGES[Command.IOCTL] = (IOCTLRequest, IOCTLResponse)

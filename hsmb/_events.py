@@ -4,13 +4,19 @@
 
 import typing
 
+from hsmb._create import CreateResponse
 from hsmb._messages import SMB2Header, SMBHeader, SMBMessage
 from hsmb._negotiate import NegotiateResponse
 from hsmb._session import SessionSetupResponse
 from hsmb._tree import TreeConnectResponse
 
 if typing.TYPE_CHECKING:
-    from hsmb._client import ClientConnection, ClientSession, ClientTreeConnect
+    from hsmb._client import (
+        ClientApplicationOpenFile,
+        ClientConnection,
+        ClientSession,
+        ClientTreeConnect,
+    )
 
 HeaderType = typing.TypeVar("HeaderType", bound=SMBHeader)
 MessageType = typing.TypeVar("MessageType", bound=SMBMessage)
@@ -110,3 +116,21 @@ class TreeConnected(MessageReceived[SMB2Header, TreeConnectResponse]):
             f"<TreeConnected name:{self.tree.share_name} tree_id:{self.tree.tree_connect_id} "
             f"session_id:{self.header.session_id}>"
         )
+
+
+class FileOpened(MessageReceived[SMB2Header, CreateResponse]):
+    def __init__(
+        self,
+        header: SMB2Header,
+        message: CreateResponse,
+        open: "ClientApplicationOpenFile",
+    ) -> None:
+        super().__init__(header, message)
+        self.open = open
+
+    @property
+    def file_id(self) -> bytes:
+        return self.open.file_id
+
+    def __repr__(self) -> str:
+        return f"<FileOpened name:{self.open.file_name}>"

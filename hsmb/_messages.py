@@ -436,6 +436,3 @@ def unpack_header(
         raise ValueError(f"Unknown SMB Header protocol {base64.b16encode(protocol_id).decode()}")
 
     return header_cls.unpack(data)
-
-
-MESSAGES: typing.Dict[Command, typing.Tuple[typing.Type[SMBMessage], typing.Type[SMBMessage]]] = {}

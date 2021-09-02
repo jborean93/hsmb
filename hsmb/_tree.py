@@ -8,7 +8,7 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import MESSAGES, Command, SMBMessage
+from hsmb._messages import Command, SMBMessage
 
 
 class ContextType(enum.IntEnum):
@@ -402,7 +402,3 @@ def unpack_tree_context(
         raise MalformedPacket(f"Unknown tree context type {context_type}")
 
     return context_cls.unpack(context_data), 8 + context_length
-
-
-MESSAGES[Command.TREE_CONNECT] = (TreeConnectRequest, TreeConnectResponse)
-MESSAGES[Command.TREE_DISCONNECT] = (TreeDisconnectRequest, TreeDisconnectResponse)

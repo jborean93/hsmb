@@ -100,12 +100,16 @@ async def main() -> None:
                 await tcp.send(conn.data_to_send())
                 conn.receive_data(await tcp.recv())
                 event = conn.next_event()
+                assert isinstance(event, hsmb.FileOpened)
 
                 try:
                     a = ""
 
                 finally:
-                    a = "'"
+                    conn.close(event.file_id, session_id, query_attrib=True)
+                    await tcp.send(conn.data_to_send())
+                    conn.receive_data(await tcp.recv())
+                    event = conn.next_event()
 
             finally:
                 conn.tree_disconnect(session_id, tree_id)
