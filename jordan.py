@@ -64,39 +64,48 @@ async def main() -> None:
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
-        protocol_negotiated = conn.next_event()
-        assert isinstance(protocol_negotiated, hsmb.ProtocolNegotiated)
+        event = conn.next_event()
+        assert isinstance(event, hsmb.ProtocolNegotiated)
 
         auth = spnego.client(username, password)
-        token = auth.step(protocol_negotiated.token)
-
-        conn.session_setup(token)
-        await tcp.send(conn.data_to_send())
-        conn.receive_data(await tcp.recv())
-        event = conn.next_event()
-        assert isinstance(event, hsmb.SessionProcessingRequired)
-
         token = auth.step(event.token)
+        session_id = 0
 
-        conn.session_setup(token, session_id=event.session_id)
-        await tcp.send(conn.data_to_send())
-        conn.receive_data(await tcp.recv())
-        event = conn.next_event()
-        assert isinstance(event, hsmb.SessionAuthenticated)
+        while not auth.complete:
+            conn.session_setup(token, session_id=session_id)
 
-        conn.set_session_key(auth.session_key, event)
-
-        session_id = event.session_id
-        try:
-            conn.tree_connect(session_id, f"\\\\{server}\\share")
             await tcp.send(conn.data_to_send())
             conn.receive_data(await tcp.recv())
             event = conn.next_event()
-            assert isinstance(event, hsmb.TreeConnected)
+
+            in_token = getattr(event, "token", None)
+            if in_token:
+                token = auth.step(in_token)
+
+            session_id = getattr(event, "session_id", session_id)
+            if isinstance(event, hsmb.SessionAuthenticated):
+                conn.set_session_key(auth.session_key, event)
+                break
+
+        try:
+            conn.tree_connect(session_id, f"\\\\{server}\\share")
+            while not isinstance(event, hsmb.TreeConnected):
+                await tcp.send(conn.data_to_send())
+                conn.receive_data(await tcp.recv())
+                event = conn.next_event()
 
             tree_id = event.tree.tree_connect_id
             try:
-                a = ""
+                conn.open(tree_id, session_id, "file.txt", hsmb.CreateDisposition.SUPERSEDE, desired_access=0x02000000)
+                await tcp.send(conn.data_to_send())
+                conn.receive_data(await tcp.recv())
+                event = conn.next_event()
+
+                try:
+                    a = ""
+
+                finally:
+                    a = "'"
 
             finally:
                 conn.tree_disconnect(session_id, tree_id)
