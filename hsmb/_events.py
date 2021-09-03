@@ -5,7 +5,8 @@
 import typing
 
 from hsmb._create import CreateResponse
-from hsmb._messages import SMB2Header, SMBHeader, SMBMessage
+from hsmb._exceptions import ProtocolError
+from hsmb._messages import SMB2Header, SMBMessage
 from hsmb._negotiate import NegotiateResponse
 from hsmb._session import SessionSetupResponse
 from hsmb._tree import TreeConnectResponse
@@ -18,7 +19,6 @@ if typing.TYPE_CHECKING:
         ClientTreeConnect,
     )
 
-HeaderType = typing.TypeVar("HeaderType", bound=SMBHeader)
 MessageType = typing.TypeVar("MessageType", bound=SMBMessage)
 
 
@@ -26,10 +26,30 @@ class Event:
     pass
 
 
-class MessageReceived(Event, typing.Generic[HeaderType, MessageType]):
+class ErrorReceived(Event):
     def __init__(
         self,
-        header: HeaderType,
+        header: SMB2Header,
+        error: ProtocolError,
+    ) -> None:
+        self.header = header
+        self.error = error
+
+    @property
+    def message_id(self) -> int:
+        return self.header.message_id
+
+    def __repr__(self) -> str:
+        return (
+            f"<ErrorReceived command:{self.header.command!s} status:0x{self.header.status:8X} "
+            f"error:{type(self.error).__name__} {self.error!s}>"
+        )
+
+
+class MessageReceived(Event, typing.Generic[MessageType]):
+    def __init__(
+        self,
+        header: SMB2Header,
         message: MessageType,
         data_available: bool = False,
     ) -> None:
@@ -37,12 +57,16 @@ class MessageReceived(Event, typing.Generic[HeaderType, MessageType]):
         self.message = message
         self.data_available = data_available
 
+    @property
+    def message_id(self) -> int:
+        return self.header.message_id
+
     def __repr__(self) -> str:
         command = getattr(self.header, "command", "UNKNOWN")
         return f"<MessageReceived {type(self.header).__name__} {command!s}>"
 
 
-class ProtocolNegotiated(MessageReceived[SMB2Header, NegotiateResponse]):
+class ProtocolNegotiated(MessageReceived[NegotiateResponse]):
     def __init__(
         self,
         header: SMB2Header,
@@ -60,24 +84,27 @@ class ProtocolNegotiated(MessageReceived[SMB2Header, NegotiateResponse]):
         return f"<ProtocolNegotiated {self.message.dialect_revision!s} server_guid:{self.message.server_guid!s}>"
 
 
-class SessionProcessingRequired(Event):
+class SessionProcessingRequired(MessageReceived[SessionSetupResponse]):
     def __init__(
         self,
         header: SMB2Header,
-        token: typing.Optional[bytes],
+        message: SessionSetupResponse,
     ) -> None:
-        self.header = header
-        self.token = token
+        super().__init__(header, message)
 
     @property
     def session_id(self) -> int:
         return self.header.session_id
 
+    @property
+    def token(self) -> bytes:
+        return self.message.security_buffer
+
     def __repr__(self) -> str:
         return f"<SessionProcessingRequired session_id:{self.session_id}>"
 
 
-class SessionAuthenticated(MessageReceived[SMB2Header, SessionSetupResponse]):
+class SessionAuthenticated(MessageReceived[SessionSetupResponse]):
     def __init__(
         self,
         header: SMB2Header,
@@ -101,7 +128,7 @@ class SessionAuthenticated(MessageReceived[SMB2Header, SessionSetupResponse]):
         return f"<SessionAuthenticated session_id:{self.session_id}>"
 
 
-class TreeConnected(MessageReceived[SMB2Header, TreeConnectResponse]):
+class TreeConnected(MessageReceived[TreeConnectResponse]):
     def __init__(
         self,
         header: SMB2Header,
@@ -118,7 +145,7 @@ class TreeConnected(MessageReceived[SMB2Header, TreeConnectResponse]):
         )
 
 
-class FileOpened(MessageReceived[SMB2Header, CreateResponse]):
+class FileOpened(MessageReceived[CreateResponse]):
     def __init__(
         self,
         header: SMB2Header,

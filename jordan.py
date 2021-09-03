@@ -102,11 +102,28 @@ async def main() -> None:
                 event = conn.next_event()
                 assert isinstance(event, hsmb.FileOpened)
 
+                file_open = event.open
                 try:
-                    a = ""
+                    conn.write(file_open, 0, b"Hello World")
+                    await tcp.send(conn.data_to_send())
+                    conn.receive_data(await tcp.recv())
+                    event = conn.next_event()
+                    assert isinstance(event, hsmb.MessageReceived)
+
+                    conn.read(file_open, 0, 11)
+                    await tcp.send(conn.data_to_send())
+                    conn.receive_data(await tcp.recv())
+                    event = conn.next_event()
+                    assert isinstance(event, hsmb.MessageReceived)
+
+                    conn.read(file_open, 11, 10)
+                    await tcp.send(conn.data_to_send())
+                    conn.receive_data(await tcp.recv())
+                    event = conn.next_event()
+                    assert isinstance(event, hsmb.ErrorReceived)
 
                 finally:
-                    conn.close(event.file_id, session_id, query_attrib=True)
+                    conn.close(file_open.file_id, session_id, query_attrib=True)
                     await tcp.send(conn.data_to_send())
                     conn.receive_data(await tcp.recv())
                     event = conn.next_event()

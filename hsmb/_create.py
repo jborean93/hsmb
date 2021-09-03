@@ -8,7 +8,7 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import MESSAGES, Command, SMBMessage
+from hsmb._messages import Command, SMBMessage
 
 
 class RequestedOplockLevel(enum.IntEnum):
@@ -548,7 +548,3 @@ class CloseResponse(SMBMessage):
             ),
             60,
         )
-
-
-MESSAGES[Command.CREATE] = (CreateRequest, CreateResponse)
-MESSAGES[Command.CLOSE] = (CloseRequest, CloseResponse)
