@@ -60,6 +60,8 @@ from hsmb._ioctl import (
 )
 from hsmb._messages import (
     Command,
+    EchoRequest,
+    EchoResponse,
     HeaderFlags,
     SMB1Header,
     SMB1HeaderFlags,
@@ -125,6 +127,11 @@ except ImportError:
     from typing_extensions import Protocol  # type: ignore[misc]
 
 
+RELATED_SESSION_ID = 0xFFFFFFFFFFFFFFFF
+RELATED_TREE_ID = 0xFFFFFFFF
+RELATED_FILE_ID = b"\xFF" * 16
+
+
 class ClientResponseCallback(Protocol):
     def __call__(
         self,
@@ -152,6 +159,8 @@ class ClientConfig(SMBConfig):
             phase.
         server_list: A dict of server entries, indexed by the server name.
         share_list: A dict of server shares, indexed by the share path.
+        encrypt_all_requests: Empowers the client to encrypt all requests after
+            session creation.
         compress_all_requests: Empowers the client to compress all requests.
 
     .. _MS-SMB2 3.2.1.1 Global:
@@ -167,6 +176,7 @@ class ClientConfig(SMBConfig):
     require_secure_negotiate: bool = True
     server_list: typing.Dict[str, "ClientServer"] = dataclasses.field(default_factory=dict)
     share_list: typing.Dict[str, "ClientShare"] = dataclasses.field(default_factory=dict)
+    encrypt_all_requests: bool = False
     compress_all_requests: bool = False
 
 
@@ -361,6 +371,82 @@ class ClientShare:
     share_type: ShareType = ShareType.UNKNOWN
 
 
+class ClientTransaction:
+    def __init__(
+        self,
+        client: "SMBClient",
+        related: bool = False,
+    ) -> None:
+        self.client = client
+        if not client.connection:
+            raise Exception("Cannot create transaction without a negotiated connection")
+        self.connection = client.connection
+        self.related = related
+        self.compress = client.config.compress_all_requests
+        self.encrypt = client.config.encrypt_all_requests
+        self.messages: typing.List[typing.Tuple[SMB2Header, SMBMessage]] = []
+
+        self._acquired = 0
+
+    def __enter__(self) -> "ClientTransaction":
+        self._acquired += 1
+        return self
+
+    def __exit__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+        self._acquired -= 1
+        if self._acquired > 0:
+            return
+
+        messages, self.messages = self.messages, []
+        session: typing.Optional[ClientSession] = None
+        raw_messages: typing.List[typing.Tuple[SMB2Header, memoryview]] = []
+
+        for idx, payload in enumerate(messages):
+            header, message = payload
+
+            if idx == 0:
+                session = self.connection.session_table.get(header.session_id)
+
+            data = header.pack()
+            data += message.pack(len(data))
+
+            # If this is not the last message add padding to ensure each header is aligned to the 8 byte boundary.
+            if idx != len(messages) - 1:
+                padding_size = 8 - (len(data) % 8 or 8)
+                data += b"\x00" * padding_size
+
+                # The next_command value cannot be known until after the header is built so just adjust it
+                memoryview(data)[20:24] = struct.pack("<I", len(data))
+
+            if header.flags & HeaderFlags.SIGNED:
+                if not self.connection.signing_algorithm_id:
+                    raise Exception("No signer available to sign message")
+
+                if not session:
+                    raise Exception("Cannot sign without session")
+
+                signature = self.connection.signing_algorithm_id.sign(session.signing_key, header, bytes(data))
+                memoryview(data)[48:64] = signature
+
+            request = self.connection.outstanding_requests[header.message_id]
+            request.message = bytes(data)
+            raw_messages.append((header, memoryview(request.message)))
+
+        if len(raw_messages) == 1 and not self.encrypt and not self.compress:
+            # Avoid creating yet another buffer and just append the memoryview
+            self.client._data_to_send.append(raw_messages[0][1])
+            return
+
+        buffer = bytearray().join([m[1] for m in raw_messages])
+        if self.compress:
+            raise NotImplementedError()
+
+        if self.encrypt and self.connection.cipher_id and session:
+            buffer = bytearray(self.connection.cipher_id.encrypt(session.encryption_key, messages[0][0], bytes(buffer)))
+
+        self.client._data_to_send.append(buffer)
+
+
 class SMBClient:
     def __init__(
         self,
@@ -370,95 +456,7 @@ class SMBClient:
         self.connection: typing.Optional[ClientConnection] = None
         self._data_to_send: typing.List[typing.Union[bytearray, memoryview]] = []
         self._receive_buffer: typing.List[bytearray] = []
-        self._transaction: typing.Optional[typing.List[typing.Tuple[SMB2Header, SMBMessage]]] = None
-
-    @contextlib.contextmanager
-    def transaction(
-        self,
-        related: bool = False,
-    ) -> typing.Iterator[typing.List[typing.Tuple[SMB2Header, SMBMessage]]]:
-        if not self.connection:
-            raise Exception("Connection has not been negotiated")
-
-        if self._transaction:
-            nested_transaction = True
-            transaction = self._transaction
-        else:
-            nested_transaction = False
-            transaction = []
-
-        try:
-            yield transaction
-
-        finally:
-            if nested_transaction or not transaction:
-                return
-
-            self._transaction = None
-            must_encrypt = False
-            must_compress = False
-            all_session: typing.Optional[ClientSession] = None
-            raw_messages: typing.List[typing.Tuple[SMB2Header, memoryview]] = []
-
-            for idx, payload in enumerate(transaction):
-                header, message = payload
-
-                session = self.connection.session_table.get(header.session_id, None)
-                if session and session.encrypt_data:
-                    must_encrypt = True
-
-                    if not all_session:
-                        all_session = session
-
-                    if all_session.session_id != session.session_id:
-                        raise Exception("Cannot encrypt compound message with different sessions")
-
-                data = header.pack()
-                data += message.pack(len(data))
-
-                # If this is not the last message add padding to ensure each header is aligned to the 8 byte boundary.
-                if idx != len(transaction) - 1:
-                    padding_size = 8 - (len(data) % 8 or 8)
-                    data += b"\x00" * padding_size
-
-                    # The next_command value cannot be known until after the header is built so just adjust it
-                    struct.pack("<I", memoryview(data)[20:24], len(data))
-
-                if header.flags & HeaderFlags.SIGNED:
-                    if not self.connection.signing_algorithm_id:
-                        raise Exception("No signer available to sign message")
-
-                    if not session:
-                        raise Exception("Cannot sign without session")
-
-                    signature = self.connection.signing_algorithm_id.sign(session.signing_key, header, bytes(data))
-                    memoryview(data)[48:64] = signature
-
-                request = self.connection.outstanding_requests[header.message_id]
-                request.message = bytes(data)
-                raw_messages.append((header, memoryview(request.message)))
-
-            if len(raw_messages) == 1 and not must_encrypt and not must_compress:
-                # Avoid creating yet another buffer and just append the memoryview
-                self._data_to_send.append(raw_messages[0][1])
-                return
-
-            buffer = bytearray()
-            if must_encrypt:
-                if not self.connection.cipher_id:
-                    raise Exception("No cipher available to encrypt")
-
-                if not all_session:
-                    raise Exception("No session available to encrypt")
-
-                for header, msg in raw_messages:
-                    enc_data = self.connection.cipher_id.encrypt(all_session.encryption_key, header, bytes(msg))
-                    buffer += enc_data
-
-            if must_compress:
-                raise NotImplementedError()
-
-            self._data_to_send.append(buffer)
+        self._next_credit_request = 0
 
     def send(
         self,
@@ -466,40 +464,76 @@ class SMBClient:
         callback: ClientResponseCallback,
         callback_state: typing.Dict[str, typing.Any],
         channel_sequence: int = 0,
-        credits: int = 0,
         priority: typing.Optional[int] = None,
         session_id: int = 0,
         tree_id: int = 0,
-        related: bool = False,
         must_sign: bool = False,
+        transaction: typing.Optional[ClientTransaction] = None,
     ) -> ClientPendingRequest:
         if not self.connection:
             raise Exception("Cannot send any message without a negotiated connection")
 
-        # This is a no-op if we are already in a transaction - otherwise it adds the message to the queue.
-        with self.transaction() as queue:
+        with (transaction or ClientTransaction(self)) as transaction:
             flags = HeaderFlags.NONE
             if priority is not None:
                 if priority < 0 or priority > 7:
                     raise ValueError("Priority must be between 0 and 7")
                 flags |= priority << 4
 
-            if related and queue:
-                first_session_id = queue[0][0].session_id
-                first_tree_id = queue[0][0].tree_id
-                if session_id != first_session_id:
-                    raise Exception("Cannot send related header with different session ids")
+            if transaction.messages:
+                first_header = transaction.messages[0][0]
 
-                if tree_id != first_tree_id:
-                    raise Exception("Cannot send related header with different tree ids")
+                if transaction.related:
+                    if session_id != RELATED_SESSION_ID:
+                        raise Exception("Invalid related session id used")
+                    if tree_id != RELATED_TREE_ID:
+                        raise Exception("Invalid related tree id used")
 
-                flags = HeaderFlags.RELATED_OPERATIONS
-                header_session_id = 0xFFFFFFFFFFFFFFFF
-                header_tree_id = 0xFFFFFFFF
+                    flags |= HeaderFlags.RELATED_OPERATIONS
 
+                else:
+                    if session_id != first_header.session_id:
+                        raise Exception("Cannot compound messages wtih different session ids")
+
+                    if tree_id != first_header.tree_id:
+                        raise Exception("Cannot compount messages with different tree ids")
+
+                lookup_session_id = first_header.session_id
+                lookup_tree_id = first_header.tree_id
             else:
-                header_session_id = session_id
-                header_tree_id = tree_id
+                lookup_session_id = session_id
+                lookup_tree_id = tree_id
+
+            session: typing.Optional[ClientSession]
+            tree: typing.Optional[ClientTreeConnect]
+            sign_msg = False
+            if lookup_session_id and lookup_session_id not in self.connection.preauth_session_table:
+                session = self.connection.session_table.get(lookup_session_id, None)
+                if not session:
+                    raise Exception("Unknown session id specified")
+
+                sign_msg = (
+                    self.config.require_message_signing or self.connection.require_signing or session.signing_required
+                )
+                if session.encrypt_data:
+                    transaction.encrypt = True
+
+            if lookup_tree_id:
+                if not session:
+                    raise Exception("Unknown tree id specified")
+
+                tree = session.tree_connect_table.get(lookup_tree_id, None)
+                if not tree:
+                    raise Exception("Unknown tree id specified")
+
+                if tree.encrypt_data:
+                    transaction.encrypt = True
+
+                if tree.compress_data:
+                    transaction.compress = True
+
+            if must_sign or (sign_msg and not transaction.encrypt):
+                flags |= HeaderFlags.SIGNED
 
             credit_charge: int
             message_id: int
@@ -553,32 +587,28 @@ class SMBClient:
                 else:
                     raise Exception("Out of credits")
 
-            session = self.connection.session_table.get(session_id, None)
-            if must_sign or (session and session.signing_required and not session.encrypt_data):
-                flags |= HeaderFlags.SIGNED
-
             header = SMB2Header(
                 credit_charge=credit_charge,
                 channel_sequence=channel_sequence,
                 status=0,
                 command=message.command,
-                credits=max(credits, credit_charge),
+                credits=max(self._next_credit_request, credit_charge),
                 flags=flags,
                 next_command=0,
                 message_id=message_id,
                 async_id=0,
-                tree_id=header_tree_id,
-                session_id=header_session_id,
+                tree_id=tree_id,
+                session_id=session_id,
                 signature=b"\x00" * 16,
             )
-
-            queue.append((header, message))
+            self._next_credit_request = 0
             self.connection.outstanding_requests[message_id] = req = ClientPendingRequest(
                 message_id=message_id,
                 receive_callback=callback,
                 receive_callback_state=callback_state,
                 message=b"",  # Set by the transaction when it's packed and signed
             )
+            transaction.messages.append((header, message))
 
             return req
 
@@ -660,6 +690,18 @@ class SMBClient:
                 self._receive_buffer[0] = self._receive_buffer[0][next_command:]
             else:
                 del self._receive_buffer[0]
+
+    def request_credits(
+        self,
+        credits: int,
+    ) -> None:
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
+
+        if not self.connection.supports_multi_credit:
+            raise Exception("Server does not support multi credit requests")
+
+        self._next_credit_request = credits
 
     def negotiate(
         self,
@@ -922,6 +964,32 @@ class SMBClient:
             callback_state={"session": session},
         )
 
+    def echo(
+        self,
+        session_id: int,
+    ) -> ClientPendingRequest:
+        if not self.connection:
+            raise Exception("No connection has been negotiated")
+
+        def process(
+            header: SMB2Header,
+            raw: memoryview,
+            message_offset: int,
+            ste: typing.Dict[str, typing.Any],
+        ) -> Event:
+            if header.status != 0:
+                raise unpack_error_response(header, raw, message_offset)[0]
+
+            message = EchoResponse.unpack(raw, message_offset, message_offset)[0]
+            return MessageReceived(header, message)
+
+        return self.send(
+            EchoRequest(),
+            session_id=session_id,
+            callback=process,
+            callback_state={},
+        )
+
     def tree_connect(
         self,
         session_id: int,
@@ -995,7 +1063,7 @@ class SMBClient:
             callback_state={"tree": tree},
         )
 
-    def open(
+    def create(
         self,
         tree_id: int,
         session_id: int,
@@ -1007,6 +1075,7 @@ class SMBClient:
         share_access: ShareAccess = ShareAccess.NONE,
         create_options: CreateOptions = CreateOptions.NONE,
         oplock_level: RequestedOplockLevel = RequestedOplockLevel.NONE,
+        transaction: typing.Optional[ClientTransaction] = None,
     ) -> ClientPendingRequest:
         if not self.connection:
             raise Exception("No connection has been negotiated")
@@ -1038,6 +1107,7 @@ class SMBClient:
                 "tree": tree,
                 "request": create,
             },
+            transaction=transaction,
         )
 
     def close(
@@ -1045,6 +1115,7 @@ class SMBClient:
         file_id: bytes,
         session_id: int,
         query_attrib: bool = False,
+        transaction: typing.Optional[ClientTransaction] = None,
     ) -> ClientPendingRequest:
         if not self.connection:
             raise Exception("No connection has been negotiated")
@@ -1083,17 +1154,22 @@ class SMBClient:
             tree_id=open.tree_connect.tree_connect_id,
             callback=process,
             callback_state={"session": session, "file_id": file_id},
+            transaction=transaction,
         )
 
     def read(
         self,
-        open: ClientApplicationOpenFile,
+        open: typing.Optional[ClientApplicationOpenFile],
         offset: int,
         length: int,
         minimum_length: int = 0,
         unbuffered: bool = False,
         compress: bool = False,
+        transaction: typing.Optional[ClientTransaction] = None,
     ) -> ClientPendingRequest:
+        if not open and (not transaction or not transaction.related):
+            raise Exception("open can only be omitted when in a related transaction")
+
         def process(
             header: SMB2Header,
             raw: memoryview,
@@ -1113,31 +1189,45 @@ class SMBClient:
         if compress:
             flags |= ReadRequestFlags.REQUEST_COMPRESSED
 
+        if open:
+            file_id = open.file_id
+            tree_id = open.tree_connect.tree_connect_id
+            session_id = open.session.session_id
+        else:
+            file_id = RELATED_FILE_ID
+            tree_id = RELATED_TREE_ID
+            session_id = RELATED_SESSION_ID
+
         return self.send(
             ReadRequest(
                 flags=flags,
                 length=length,
                 offset=offset,
-                file_id=open.file_id,
+                file_id=file_id,
                 minimum_count=minimum_length,
                 channel=ReadChannel.NONE,
                 remaining_bytes=0,
             ),
             callback=process,
             callback_state={},
-            session_id=open.session.session_id,
-            tree_id=open.tree_connect.tree_connect_id,
+            session_id=session_id,
+            tree_id=tree_id,
+            transaction=transaction,
         )
 
     def write(
         self,
-        open: ClientApplicationOpenFile,
+        open: typing.Optional[ClientApplicationOpenFile],
         offset: int,
         data: typing.Union[bytes, bytearray, memoryview],
         write_through: bool = False,
         unbuffered_write: bool = False,
         compress_write: bool = False,
+        transaction: typing.Optional[ClientTransaction] = None,
     ) -> ClientPendingRequest:
+        if not open and (not transaction or not transaction.related):
+            raise Exception("open can only be omitted when in a related transaction")
+
         def process(
             header: SMB2Header,
             raw: memoryview,
@@ -1156,10 +1246,19 @@ class SMBClient:
         if unbuffered_write:
             flags |= WriteFlags.WRITE_UNBUFFERED
 
+        if open:
+            file_id = open.file_id
+            tree_id = open.tree_connect.tree_connect_id
+            session_id = open.session.session_id
+        else:
+            file_id = RELATED_FILE_ID
+            tree_id = RELATED_TREE_ID
+            session_id = RELATED_SESSION_ID
+
         return self.send(
             WriteRequest(
                 offset=offset,
-                file_id=open.file_id,
+                file_id=file_id,
                 channel=WriteChannel.NONE,
                 remaining_bytes=0,
                 flags=flags,
@@ -1167,8 +1266,9 @@ class SMBClient:
             ),
             callback=process,
             callback_state={},
-            session_id=open.session.session_id,
-            tree_id=open.tree_connect.tree_connect_id,
+            session_id=session_id,
+            tree_id=tree_id,
+            transaction=transaction,
         )
 
 
@@ -1191,10 +1291,12 @@ def _process_negotiate_response(
     requested_preauth_algos = typing.cast(
         typing.Dict[int, typing.Type[HashAlgorithmBase]], state["requested_preauth_algos"]
     )
+    available_ciphers = {c.cipher_id(): c for c in config.registered_ciphers or []}
     requested_ciphers = typing.cast(typing.Dict[Cipher, typing.Type[CipherBase]], state["requested_ciphers"])
     requested_compressors = typing.cast(
         typing.Dict[CompressionAlgorithm, typing.Type[CompressionAlgorithmBase]], state["requested_compressors"]
     )
+    available_signers = {s.signing_id(): s for s in config.registered_signing_algorithms or []}
     requested_signers = typing.cast(
         typing.Dict[SigningAlgorithm, typing.Type[SigningAlgorithmBase]], state["requested_signers"]
     )
@@ -1214,6 +1316,7 @@ def _process_negotiate_response(
     connection.server_guid = message.server_guid
     connection.gss_negotiate_token = message.security_buffer
     connection.require_signing = bool(message.security_mode & SecurityModes.SIGNING_REQUIRED)
+    connection.signing_algorithm_id = available_signers.get(SigningAlgorithm.HMAC_SHA256, HMACSHA256SigningAlgorithm)()
 
     if message.dialect_revision == Dialect.SMB2_WILDCARD:
         # This should only occur if as_smb1=True is set and the server returns the wildcard dialect. The client
@@ -1228,9 +1331,6 @@ def _process_negotiate_response(
 
     connection.dialect = message.dialect_revision
 
-    # Overriden if a newer dialect was chosen
-    connection.signing_algorithm_id = HMACSHA256SigningAlgorithm()
-
     if message.dialect_revision >= Dialect.SMB210:
         connection.supports_file_leasing = bool(message.capabilities & Capabilities.LEASING)
         connection.supports_multi_credit = bool(message.capabilities & Capabilities.LARGE_MTU)
@@ -1243,6 +1343,7 @@ def _process_negotiate_response(
 
         if message.dialect_revision < Dialect.SMB311:
             connection.supports_encryption = bool(message.capabilities & Capabilities.ENCRYPTION)
+            connection.cipher_id = available_ciphers.get(Cipher.AES128_CCM, AES128CCMCipher)()
 
         if not connection.server:
             connection.server = config.server_list.setdefault(
@@ -1269,9 +1370,7 @@ def _process_negotiate_response(
         if connection.server.capabilities != message.capabilities:
             raise Exception("Server capabilities does not match registered capabilities")
 
-        # Overriden by the below if another was negotiated
-        connection.signing_algorithm_id = AESCMACSigningAlgorithm()
-        connection.cipher_id = AES128CCMCipher()
+        connection.signing_algorithm_id = available_signers.get(SigningAlgorithm.AES_CMAC, AESCMACSigningAlgorithm)()
 
     if message.dialect_revision >= Dialect.SMB311:
         found_contexts: typing.Set[ContextType] = set()
@@ -1300,6 +1399,16 @@ def _process_negotiate_response(
                         raise Exception("Unexpected cipher selected")
 
                     connection.cipher_id = requested_ciphers[cipher_id]()
+
+            elif isinstance(context, CompressionCapabilities):
+                if len(context.compression_algorithms) != 1:
+                    raise Exception(f"Found {len(context.compression_algorithms)} compressors, expecting 1")
+
+                compression_algo = context.compression_algorithms[0]
+                if compression_algo not in requested_compressors:
+                    raise Exception("Unexpected compression algorithm selected")
+
+                connection.compression_ids = [requested_compressors[compression_algo]()]
 
             elif isinstance(context, SigningCapabilities):
                 if len(context.signing_algorithms) != 1:

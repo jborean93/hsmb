@@ -8,6 +8,8 @@ import enum
 import struct
 import typing
 
+from hsmb._exceptions import MalformedPacket
+
 
 class Command(enum.IntEnum):
     NEGOTIATE = 0x0000
@@ -404,6 +406,64 @@ class TransformHeader(SMBHeader):
             ),
             52,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class EchoRequest(SMBMessage):
+    __slots__ = ()
+
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(Command.ECHO)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["EchoRequest", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise MalformedPacket("Echo request payload is too small")
+
+        return EchoRequest(), 4
+
+
+@dataclasses.dataclass(frozen=True)
+class EchoResponse(SMBMessage):
+    __slots__ = ()
+
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(Command.ECHO)
+
+    def pack(
+        self,
+        offset_from_header: int,
+    ) -> bytearray:
+        return bytearray(b"\x04\x00\x00\x00")
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset_from_header: int,
+        offset: int = 0,
+    ) -> typing.Tuple["EchoResponse", int]:
+        view = memoryview(data)[offset:]
+        if len(view) < 4:
+            raise MalformedPacket("Echo response payload is too small")
+
+        return EchoResponse(), 4
 
 
 def unpack_header(

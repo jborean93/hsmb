@@ -1,4 +1,4 @@
-from hsmb._client import ClientConfig, SMBClient
+from hsmb._client import ClientConfig, ClientTransaction, SMBClient
 from hsmb._create import CreateDisposition
 from hsmb._events import (
     ErrorReceived,
@@ -13,6 +13,7 @@ from hsmb._events import (
 
 __all__ = [
     "ClientConfig",
+    "ClientTransaction",
     "CreateDisposition",
     "ErrorReceived",
     "Event",

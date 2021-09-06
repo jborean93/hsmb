@@ -6,7 +6,8 @@ import enum
 import struct
 import typing
 
-from hsmb._messages import SMB2Header
+if typing.TYPE_CHECKING:
+    from hsmb._messages import SMB2Header
 
 
 class NtStatus(enum.IntEnum):
@@ -71,7 +72,7 @@ class NtStatus(enum.IntEnum):
 
 
 def unpack_error_response(
-    header: SMB2Header,
+    header: "SMB2Header",
     message: typing.Union[bytes, bytearray, memoryview],
     offset: int = 0,
     context: typing.Optional[str] = None,

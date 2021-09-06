@@ -59,7 +59,7 @@ async def main() -> None:
     # password = "VagrantPass1"
 
     async with TcpConnection(server, 445) as tcp:
-        conn = hsmb.SMBClient(hsmb.ClientConfig())
+        conn = hsmb.SMBClient(hsmb.ClientConfig(encrypt_all_requests=True))
         conn.negotiate(server)
 
         await tcp.send(conn.data_to_send())
@@ -88,6 +88,7 @@ async def main() -> None:
                 break
 
         try:
+            conn.request_credits(64)
             conn.tree_connect(session_id, f"\\\\{server}\\share")
             while not isinstance(event, hsmb.TreeConnected):
                 await tcp.send(conn.data_to_send())
@@ -96,7 +97,13 @@ async def main() -> None:
 
             tree_id = event.tree.tree_connect_id
             try:
-                conn.open(tree_id, session_id, "file.txt", hsmb.CreateDisposition.SUPERSEDE, desired_access=0x02000000)
+                conn.create(
+                    tree_id,
+                    session_id,
+                    "file.txt",
+                    hsmb.CreateDisposition.SUPERSEDE,
+                    desired_access=0x02000000,
+                )
                 await tcp.send(conn.data_to_send())
                 conn.receive_data(await tcp.recv())
                 event = conn.next_event()
@@ -127,6 +134,32 @@ async def main() -> None:
                     await tcp.send(conn.data_to_send())
                     conn.receive_data(await tcp.recv())
                     event = conn.next_event()
+
+                conn.echo(session_id=session_id)
+                await tcp.send(conn.data_to_send())
+                conn.receive_data(await tcp.recv())
+                event = conn.next_event()
+                assert isinstance(event, hsmb.MessageReceived)
+
+                with hsmb.ClientTransaction(conn, related=True) as transaction:
+                    conn.create(
+                        tree_id,
+                        session_id,
+                        "file.txt",
+                        hsmb.CreateDisposition.SUPERSEDE,
+                        desired_access=0x02000000,
+                        transaction=transaction,
+                    )
+                    conn.write(None, 0, b"Hello World", transaction=transaction)
+                    conn.read(None, 0, 11, transaction=transaction)
+                    conn.read(None, 11, 10, transaction=transaction)
+
+                await tcp.send(conn.data_to_send())
+                conn.receive_data(await tcp.recv())
+                while True:
+                    event = conn.next_event()
+                    if not event:
+                        break
 
             finally:
                 conn.tree_disconnect(session_id, tree_id)
