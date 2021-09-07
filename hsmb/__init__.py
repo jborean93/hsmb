@@ -10,18 +10,38 @@ from hsmb._events import (
     SessionProcessingRequired,
     TreeConnected,
 )
+from hsmb._negotiate import (
+    Cipher,
+    CipherBase,
+    CompressionAlgorithm,
+    CompressionAlgorithmBase,
+    Dialect,
+    HashAlgorithm,
+    HashAlgorithmBase,
+    SigningAlgorithm,
+    SigningAlgorithmBase,
+)
 
 __all__ = [
+    "Cipher",
+    "CipherBase",
     "ClientConfig",
     "ClientTransaction",
+    "CompressionAlgorithm",
+    "CompressionAlgorithmBase",
     "CreateDisposition",
+    "Dialect",
     "ErrorReceived",
     "Event",
     "FileOpened",
+    "HashAlgorithm",
+    "HashAlgorithmBase",
     "MessageReceived",
     "ProtocolNegotiated",
     "SessionAuthenticated",
     "SessionProcessingRequired",
+    "SigningAlgorithm",
+    "SigningAlgorithmBase",
     "SMBClient",
     "TreeConnected",
 ]

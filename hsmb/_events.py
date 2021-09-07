@@ -6,7 +6,8 @@ import typing
 
 from hsmb._create import CreateResponse
 from hsmb._exceptions import ProtocolError
-from hsmb._messages import SMB2Header, SMBMessage
+from hsmb._header import SMB2Header
+from hsmb._messages import SMBMessage
 from hsmb._negotiate import NegotiateResponse
 from hsmb._session import SessionSetupResponse
 from hsmb._tree import TreeConnectResponse

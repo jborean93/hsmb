@@ -10,7 +10,10 @@ import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMB2Header, SMBMessage, TransformHeader
+from hsmb._messages import Command, SMBMessage
+
+if typing.TYPE_CHECKING:
+    from hsmb._header import SMB2Header, TransformHeader
 
 
 class ContextType(enum.IntEnum):

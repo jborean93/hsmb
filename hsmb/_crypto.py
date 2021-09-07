@@ -12,13 +12,8 @@ from cryptography.hazmat.primitives import cmac, hashes
 from cryptography.hazmat.primitives.ciphers import aead, algorithms
 from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC, CounterLocation, Mode
 
-from hsmb._messages import (
-    Command,
-    HeaderFlags,
-    SMB2Header,
-    TransformFlags,
-    TransformHeader,
-)
+from hsmb._header import HeaderFlags, SMB2Header, TransformFlags, TransformHeader
+from hsmb._messages import Command
 from hsmb._negotiate import (
     Cipher,
     CipherBase,

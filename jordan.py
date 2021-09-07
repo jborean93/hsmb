@@ -89,7 +89,7 @@ async def main() -> None:
 
         try:
             conn.request_credits(64)
-            conn.tree_connect(session_id, f"\\\\{server}\\share")
+            conn.tree_connect(session_id, f"\\\\{server}\\share-encrypted")
             while not isinstance(event, hsmb.TreeConnected):
                 await tcp.send(conn.data_to_send())
                 conn.receive_data(await tcp.recv())

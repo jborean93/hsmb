@@ -7,7 +7,7 @@ import struct
 import typing
 
 if typing.TYPE_CHECKING:
-    from hsmb._messages import SMB2Header
+    from hsmb._header import SMB2Header
 
 
 class NtStatus(enum.IntEnum):

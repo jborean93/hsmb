@@ -40,6 +40,16 @@ from hsmb._events import (
     TreeConnected,
 )
 from hsmb._exceptions import NtStatus, unpack_error_response
+from hsmb._header import (
+    CompressionTransform,
+    HeaderFlags,
+    SMB1Header,
+    SMB1HeaderFlags,
+    SMB2Header,
+    SMBHeader,
+    TransformHeader,
+    unpack_header,
+)
 from hsmb._io import (
     FlushRequest,
     FlushResponse,
@@ -58,19 +68,7 @@ from hsmb._ioctl import (
     ValidateNegotiateInfoRequest,
     ValidateNegotiateInfoResponse,
 )
-from hsmb._messages import (
-    Command,
-    EchoRequest,
-    EchoResponse,
-    HeaderFlags,
-    SMB1Header,
-    SMB1HeaderFlags,
-    SMB2Header,
-    SMBHeader,
-    SMBMessage,
-    TransformHeader,
-    unpack_header,
-)
+from hsmb._messages import Command, EchoRequest, EchoResponse, SMBMessage
 from hsmb._negotiate import (
     Capabilities,
     Cipher,
@@ -401,50 +399,116 @@ class ClientTransaction:
         session: typing.Optional[ClientSession] = None
         raw_messages: typing.List[typing.Tuple[SMB2Header, memoryview]] = []
 
-        for idx, payload in enumerate(messages):
-            header, message = payload
+        try:
+            for idx, payload in enumerate(messages):
+                header, message = payload
 
-            if idx == 0:
-                session = self.connection.session_table.get(header.session_id)
+                if idx == 0:
+                    session = self.connection.session_table.get(header.session_id)
+                    if (
+                        not session
+                        and header.session_id != 0
+                        and header.session_id not in self.connection.preauth_session_table
+                    ):
+                        raise Exception("Failed to find session")
 
-            data = header.pack()
-            data += message.pack(len(data))
+                data = header.pack()
+                data += message.pack(len(data))
 
-            # If this is not the last message add padding to ensure each header is aligned to the 8 byte boundary.
-            if idx != len(messages) - 1:
-                padding_size = 8 - (len(data) % 8 or 8)
-                data += b"\x00" * padding_size
+                # If this is not the last message add padding to ensure each header is aligned to the 8 byte boundary.
+                if idx != len(messages) - 1:
+                    padding_size = 8 - (len(data) % 8 or 8)
+                    data += b"\x00" * padding_size
 
-                # The next_command value cannot be known until after the header is built so just adjust it
-                memoryview(data)[20:24] = struct.pack("<I", len(data))
+                    # The next_command value cannot be known until after the header is built so just adjust it
+                    memoryview(data)[20:24] = struct.pack("<I", len(data))
 
-            if header.flags & HeaderFlags.SIGNED:
-                if not self.connection.signing_algorithm_id:
-                    raise Exception("No signer available to sign message")
+                if header.flags & HeaderFlags.SIGNED:
+                    if not self.connection.signing_algorithm_id:
+                        raise Exception("No signer available to sign message")
 
-                if not session:
-                    raise Exception("Cannot sign without session")
+                    if not session:
+                        raise Exception("Cannot sign without session")
 
-                signature = self.connection.signing_algorithm_id.sign(session.signing_key, header, bytes(data))
-                memoryview(data)[48:64] = signature
+                    signature = self.connection.signing_algorithm_id.sign(session.signing_key, header, bytes(data))
+                    memoryview(data)[48:64] = signature
 
-            request = self.connection.outstanding_requests[header.message_id]
-            request.message = bytes(data)
-            raw_messages.append((header, memoryview(request.message)))
+                request = self.connection.outstanding_requests[header.message_id]
+                request.message = bytes(data)
+                raw_messages.append((header, memoryview(request.message)))
 
-        if len(raw_messages) == 1 and not self.encrypt and not self.compress:
-            # Avoid creating yet another buffer and just append the memoryview
-            self.client._data_to_send.append(raw_messages[0][1])
-            return
+            if len(raw_messages) == 1 and not self.encrypt and not self.compress:
+                # Avoid creating yet another buffer and just append the memoryview
+                self.client._data_to_send.append(raw_messages[0][1])
+                return
 
-        buffer = bytearray().join([m[1] for m in raw_messages])
-        if self.compress:
-            raise NotImplementedError()
+            buffer = bytearray().join([m[1] for m in raw_messages])
+            if self.compress:
+                raise NotImplementedError()
 
-        if self.encrypt and self.connection.cipher_id and session:
-            buffer = bytearray(self.connection.cipher_id.encrypt(session.encryption_key, messages[0][0], bytes(buffer)))
+            if session and self.encrypt:
+                if not self.connection.cipher_id:
+                    raise Exception("No negotiated cipher to encrypt data with")
 
-        self.client._data_to_send.append(buffer)
+                buffer = bytearray(
+                    self.connection.cipher_id.encrypt(session.encryption_key, messages[0][0], bytes(buffer))
+                )
+
+            self.client._data_to_send.append(buffer)
+
+        except:
+            for header, _ in messages:
+                refund_credit(self.connection, header.message_id, header.credit_charge)
+                del self.connection.outstanding_requests[header.message_id]
+
+            raise
+
+
+def request_credit(
+    connection: ClientConnection,
+    charge: int,
+) -> int:
+    charge = max(1, charge)
+
+    for idx, window in enumerate(connection.sequence_window):
+        seq_id, num_creds = window
+
+        if charge <= num_creds:
+            message_id = seq_id
+            credits_remaining = num_creds - charge
+            if credits_remaining:
+                connection.sequence_window[idx] = (seq_id + charge, credits_remaining)
+            else:
+                del connection.sequence_window[idx]
+
+            if not connection.sequence_window:
+                # Used to trace the current high sequence window number for the response recharge
+                connection.sequence_window.append((seq_id + charge, 0))
+
+            return message_id
+
+    else:
+        raise Exception("Out of credits")
+
+
+def refund_credit(
+    connection: ClientConnection,
+    credit: int,
+    charge: int,
+) -> None:
+    for idx, window in enumerate(connection.sequence_window):
+        seq_id, num_creds = window
+
+        if credit < seq_id:
+            if credit + charge == seq_id:
+                del connection.sequence_window[idx]
+                charge += num_creds
+
+            connection.sequence_window.insert(idx, (credit, charge))
+            break
+
+    else:
+        connection.sequence_window.append((credit, charge))
 
 
 class SMBClient:
@@ -566,26 +630,7 @@ class SMBClient:
                 else:
                     credit_charge = 0
 
-                sequence_charge = max(1, credit_charge)
-                for idx, window in enumerate(self.connection.sequence_window):
-                    seq_id, num_creds = window
-
-                    if sequence_charge <= num_creds:
-                        message_id = seq_id
-                        credits_remaining = num_creds - sequence_charge
-                        if credits_remaining:
-                            self.connection.sequence_window[idx] = (seq_id + sequence_charge, credits_remaining)
-                        else:
-                            del self.connection.sequence_window[idx]
-
-                        if not self.connection.sequence_window:
-                            # Used to trace the current high sequence window number for the response recharge
-                            self.connection.sequence_window.append((seq_id + sequence_charge, 0))
-
-                        break
-
-                else:
-                    raise Exception("Out of credits")
+                message_id = request_credit(self.connection, credit_charge)
 
             header = SMB2Header(
                 credit_charge=credit_charge,
@@ -730,7 +775,7 @@ class SMBClient:
 
         client_capabilities = Capabilities.NONE
         if highest_dialect >= Dialect.SMB300:
-            client_capabilities = Capabilities.NONE
+            client_capabilities |= Capabilities.ENCRYPTION | Capabilities.LARGE_MTU
 
         self.config.connection_table[server_name] = self.connection = connection = ClientConnection(
             sequence_window=[(0, 1)],
@@ -1343,7 +1388,7 @@ def _process_negotiate_response(
 
         if message.dialect_revision < Dialect.SMB311:
             connection.supports_encryption = bool(message.capabilities & Capabilities.ENCRYPTION)
-            connection.cipher_id = available_ciphers.get(Cipher.AES128_CCM, AES128CCMCipher)()
+        connection.cipher_id = available_ciphers.get(Cipher.AES128_CCM, AES128CCMCipher)()
 
         if not connection.server:
             connection.server = config.server_list.setdefault(
@@ -1499,6 +1544,7 @@ def _process_tree_connect_response(
             share_type=message.share_type,
         ),
     )
+    session.tree_connect_table[header.tree_id] = tree_connect
 
     if (
         session.connection.dialect >= Dialect.SMB300
@@ -1531,7 +1577,6 @@ def _process_tree_connect_response(
         return MessageReceived(header, message, data_available=True)
 
     else:
-        session.tree_connect_table[header.tree_id] = tree_connect
         return TreeConnected(header, message, tree_connect)
 
 
@@ -1563,9 +1608,6 @@ def _process_validate_negotiate_info_response(
 
     if validate.dialect != session.connection.dialect:
         raise Exception("Invalid dialect")
-
-    # FIXME: Invalid all sessions in connection table if any of the above fail
-    session.tree_connect_table[header.tree_id] = tree
 
     return TreeConnected(tree_header, tree_message, tree)
 
