@@ -317,7 +317,7 @@ class ReadResponse(SMBMessage):
 @dataclasses.dataclass(frozen=True)
 class WriteRequest(SMBMessage):
 
-    __slots__ = ("offset", "file_id", "channel", "remaining_bytes", "flags", "data", "write_channel_info")
+    __slots__ = ("offset", "file_id", "channel", "remaining_bytes", "flags", "data", "write_channel_info", "compress")
 
     offset: int
     file_id: bytes
@@ -326,6 +326,7 @@ class WriteRequest(SMBMessage):
     flags: WriteFlags
     data: typing.Union[bytes, bytearray, memoryview]
     write_channel_info: typing.Optional[bytes]
+    compress: bool
 
     def __init__(
         self,
@@ -337,6 +338,7 @@ class WriteRequest(SMBMessage):
         flags: WriteFlags,
         data: typing.Union[bytes, bytearray, memoryview],
         write_channel_info: typing.Optional[bytes] = None,
+        compress: bool = False,
     ) -> None:
         super().__init__(Command.WRITE)
         object.__setattr__(self, "offset", offset)
@@ -346,6 +348,14 @@ class WriteRequest(SMBMessage):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "data", data)
         object.__setattr__(self, "write_channel_info", write_channel_info)
+        object.__setattr__(self, "compress", compress)
+
+    @property
+    def compress_hint(self) -> typing.Optional[slice]:
+        if self.compress:
+            return slice(48, 48 + len(self.data))
+        else:
+            return None
 
     def pack(
         self,

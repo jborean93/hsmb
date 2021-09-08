@@ -57,6 +57,7 @@ class TransformFlags(enum.IntFlag):
 
 class CompressionFlags(enum.IntFlag):
     NONE = 0x0000
+    CHAINED = 0x0001
 
 
 @dataclasses.dataclass(frozen=True)
@@ -370,27 +371,62 @@ class TransformHeader(SMBHeader):
 
 
 @dataclasses.dataclass(frozen=True)
-class CompressionTransformChained(SMBHeader):
-    __slots__ = ("original_compressed_segment_size", "compression_algorithm", "flags", "offset")
+class CompressionTransform(SMBHeader):
+    __slots__ = "original_compressed_segment_size"
 
     original_compressed_segment_size: int
+
+    def __init__(
+        self,
+        *,
+        original_compressed_segment_size: int,
+    ) -> None:
+        super().__init__(b"\xFCSMB")
+        object.__setattr__(self, "original_compressed_segment_size", original_compressed_segment_size)
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> typing.Tuple["CompressionTransform", int]:
+        view = memoryview(data)[offset:]
+
+        if len(view) < 12:
+            raise MalformedPacket("Compression transform header payload is too small")
+
+        flags = CompressionFlags(struct.unpack("<H", view[10:12])[0])
+        if flags & CompressionFlags.CHAINED:
+            return CompressionTransformChained.unpack(data, offset)
+
+        else:
+            return CompressionTransformUnchained.unpack(data, offset)
+
+
+@dataclasses.dataclass(frozen=True)
+class CompressionTransformUnchained(CompressionTransform):
+
+    __slots__ = ("compression_algorithm", "flags", "offset", "data")
+
     compression_algorithm: CompressionAlgorithm
     flags: CompressionFlags
     offset: int
+    data: memoryview
 
     def __init__(
         self,
         *,
         original_compressed_segment_size: int,
         compression_algorithm: CompressionAlgorithm,
-        flags: CompressionFlags = CompressionFlags.NONE,
-        offset: int = 0,
+        flags: CompressionFlags,
+        offset: int,
+        data: memoryview,
     ) -> None:
-        super().__init__(b"\xFCSMB")
-        object.__setattr__(self, "original_compressed_segment_size", original_compressed_segment_size)
+        super().__init__(original_compressed_segment_size=original_compressed_segment_size)
         object.__setattr__(self, "compression_algorithm", compression_algorithm)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "offset", offset)
+        object.__setattr__(self, "data", data)
 
     def pack(self) -> bytearray:
         return bytearray().join(
@@ -400,6 +436,61 @@ class CompressionTransformChained(SMBHeader):
                 self.compression_algorithm.to_bytes(2, byteorder="little"),
                 self.flags.to_bytes(2, byteorder="little"),
                 self.offset.to_bytes(4, byteorder="little"),
+                bytes(self.data),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> typing.Tuple["CompressionTransformUnchained", int]:
+        view = memoryview(data)[offset:]
+
+        if len(view) < 16:
+            raise MalformedPacket("Compression transform header payload is too small")
+
+        original_compressed_segment_size = struct.unpack("<I", view[4:8])[0]
+        compression_algorithm = CompressionAlgorithm(struct.unpack("<H", view[8:10])[0])
+        flags = CompressionFlags(struct.unpack("<H", view[10:12])[0])
+        offset = struct.unpack("<I", view[12:16])[0]
+
+        return (
+            CompressionTransformUnchained(
+                original_compressed_segment_size=original_compressed_segment_size,
+                compression_algorithm=compression_algorithm,
+                flags=flags,
+                offset=offset,
+                data=view[16:],
+            ),
+            len(view),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class CompressionTransformChained(CompressionTransform):
+
+    __slots__ = ("compression_payload_header",)
+
+    compression_payload_header: typing.List["CompressionChainedPayloadHeader"]
+
+    def __init__(
+        self,
+        *,
+        original_compressed_segment_size: int,
+        compression_payload_header: typing.List["CompressionChainedPayloadHeader"],
+    ) -> None:
+        super().__init__(original_compressed_segment_size=original_compressed_segment_size)
+        object.__setattr__(self, "compression_payload_header", compression_payload_header)
+
+    def pack(self) -> bytearray:
+        buffer = bytearray()
+        return bytearray().join(
+            [
+                self.protocol_id,
+                self.original_compressed_segment_size.to_bytes(4, byteorder="little"),
+                buffer,
             ]
         )
 
@@ -411,33 +502,126 @@ class CompressionTransformChained(SMBHeader):
     ) -> typing.Tuple["CompressionTransformChained", int]:
         view = memoryview(data)[offset:]
 
-        if len(view) < 12:
+        if len(view) < 16:
             raise MalformedPacket("Compression transform header payload is too small")
 
-        original_compressed_segment_size = struct.unpack("<I", view[0:4])[0]
-        compression_algorithm = CompressionAlgorithm(struct.unpack("<H", view[4:6])[0])
-        flags = CompressionFlags(struct.unpack("<H", view[6:8])[0])
-        offset = struct.unpack("<I", view[8:12])[0]
+        original_compressed_segment_size = struct.unpack("<I", view[4:8])[0]
+        payloads: typing.List["CompressionChainedPayloadHeader"] = []
+        end_idx = 8
+
+        while end_idx < len(view):
+            payload, new_offset = CompressionChainedPayloadHeader.unpack(view, end_idx)
+            payloads.append(payload)
+            end_idx += new_offset
 
         return (
             CompressionTransformChained(
                 original_compressed_segment_size=original_compressed_segment_size,
-                compression_algorithm=compression_algorithm,
-                flags=flags,
-                offset=offset,
+                compression_payload_header=payloads,
             ),
-            12,
+            end_idx,
         )
 
 
 @dataclasses.dataclass(frozen=True)
-class CompressionTransformUnchained(SMBHeader):
-    __slots__ = ()
+class CompressionChainedPayloadHeader:
+    __slots__ = ("compression_algorithm", "flags", "data")
+
+    compression_algorithm: CompressionAlgorithm
+    flags: CompressionFlags
+    data: memoryview
 
     def __init__(
         self,
+        *,
+        compression_algorithm: CompressionAlgorithm,
+        flags: CompressionFlags,
+        data: memoryview,
     ) -> None:
-        super().__init__(b"\xFCSMB")
+        object.__setattr__(self, "compression_algorithm", compression_algorithm)
+        object.__setattr__(self, "flags", flags)
+        object.__setattr__(self, "data", data)
+
+    def pack(self) -> bytearray:
+        return bytearray().join(
+            [
+                self.compression_algorithm.to_bytes(2, byteorder="little"),
+                self.flags.to_bytes(2, byteorder="little"),
+                len(self.data).to_bytes(4, byteorder="little"),
+                bytes(self.data),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> typing.Tuple["CompressionChainedPayloadHeader", int]:
+        view = memoryview(data[offset:])
+
+        if len(view) < 8:
+            raise MalformedPacket("Compression transform header payload is too small")
+
+        compression_algorithm = CompressionAlgorithm(struct.unpack("<H", view[0:2])[0])
+        flags = CompressionFlags(struct.unpack("<H", view[2:4])[0])
+        length = struct.unpack("<I", view[4:8])[0]
+
+        if len(view) < 8 + length:
+            raise MalformedPacket("Compression transform chained header payload out of bounds")
+        end_idx = 8 + length
+
+        return (
+            CompressionChainedPayloadHeader(
+                compression_algorithm=compression_algorithm,
+                flags=flags,
+                data=view[8:end_idx],
+            ),
+            end_idx,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class CompressionPatternPayloadV1:
+
+    __slots__ = ("pattern", "repetitions")
+
+    pattern: int
+    repetitions: int
+
+    def __init__(
+        self,
+        *,
+        pattern: int,
+        repetitions: int,
+    ) -> None:
+        object.__setattr__(self, "pattern", pattern)
+        object.__setattr__(self, "repetitions", repetitions)
+
+    def pack(self) -> bytearray:
+        return bytearray().join(
+            [
+                self.pattern.to_bytes(1, byteorder="little"),
+                b"\x00\x00\x00",  # Reserved1 + Reserved2
+                self.repetitions.to_bytes(4, byteorder="little"),
+            ]
+        )
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> typing.Tuple["CompressionPatternPayloadV1", int]:
+        view = memoryview(data)[offset:]
+
+        if len(view) < 8:
+            raise MalformedPacket("Compression pattern payload v1 is too small")
+
+        pattern = struct.unpack("<B", view[:1])[0]
+        repetitions = struct.unpack("<I", view[4:8])[0]
+
+        return cls(pattern=pattern, repetitions=repetitions), 8
 
 
 def unpack_header(
@@ -466,6 +650,8 @@ def unpack_header(
         header_cls = SMB2Header
     elif protocol_id == b"\xFDSMB":
         header_cls = TransformHeader
+    elif protocol_id == b"\xFCSMB":
+        header_cls = CompressionTransform
     else:
         raise ValueError(f"Unknown SMB Header protocol {base64.b16encode(protocol_id).decode()}")
 

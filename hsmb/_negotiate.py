@@ -13,7 +13,7 @@ from hsmb._exceptions import MalformedPacket
 from hsmb._messages import Command, SMBMessage
 
 if typing.TYPE_CHECKING:
-    from hsmb._header import SMB2Header, TransformHeader
+    from hsmb._header import CompressionTransform, SMB2Header, TransformHeader
 
 
 class ContextType(enum.IntEnum):
@@ -401,7 +401,10 @@ class HashAlgorithmBase(metaclass=abc.ABCMeta):
         ...
 
     @abc.abstractmethod
-    def hash(self, data: bytes) -> bytes:
+    def hash(
+        self,
+        data: bytes,
+    ) -> bytes:
         ...
 
 
@@ -414,34 +417,47 @@ class CipherBase(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def encrypt(
         self,
-        key: bytes,
         header: "SMB2Header",
-        message: bytes,
-    ) -> bytes:
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
         ...
 
     @abc.abstractmethod
     def decrypt(
         self,
-        key: bytes,
         header: "TransformHeader",
-        message: bytes,
-    ) -> bytes:
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
         ...
 
 
 class CompressionAlgorithmBase(metaclass=abc.ABCMeta):
     @classmethod
     @abc.abstractmethod
-    def compression_id(cls) -> CompressionAlgorithm:
+    def compression_ids(cls) -> typing.List[CompressionAlgorithm]:
+        ...
+
+    @classmethod
+    def can_chain(cls) -> bool:
         ...
 
     @abc.abstractmethod
-    def compress(self) -> bytes:
+    def compress(
+        self,
+        algorithms: typing.List[CompressionAlgorithm],
+        data: bytearray,
+        hints: typing.List[slice],
+        supports_chaining: bool,
+    ) -> bytearray:
         ...
 
     @abc.abstractmethod
-    def decompress(self) -> bytes:
+    def decompress(
+        self,
+        header: "CompressionTransform",
+    ) -> bytearray:
         ...
 
 

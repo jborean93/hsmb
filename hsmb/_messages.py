@@ -38,6 +38,10 @@ class SMBMessage:
 
     command: Command
 
+    @property
+    def compress_hint(self) -> typing.Optional[slice]:
+        return None
+
     def pack(
         self,
         offset_from_header: int,

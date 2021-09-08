@@ -27,9 +27,9 @@ from hsmb._negotiate import (
 def _encrypt_aes(
     algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
     header: SMB2Header,
+    message: memoryview,
     key: bytes,
-    message: bytes,
-) -> bytes:
+) -> bytearray:
     if algorithm == aead.AESCCM:
         nonce = os.urandom(11)
     else:
@@ -46,29 +46,29 @@ def _encrypt_aes(
     )
 
     cipher = algorithm(key)
-    enc_data = cipher.encrypt(nonce, message, bytes(transform[20:]))
+    enc_data = cipher.encrypt(nonce, bytes(message), bytes(transform[20:]))
     enc_message, signature = enc_data[:-16], enc_data[-16:]
 
     memoryview(transform)[4:20] = signature
-    return bytes(transform) + enc_message
+    return transform + enc_message
 
 
 def _decrypt_aes(
     algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
     header: TransformHeader,
+    message: memoryview,
     key: bytes,
-    message: bytes,
-) -> bytes:
+) -> bytearray:
     if algorithm == aead.AESCCM:
         nonce = header.nonce[:11]
     else:
         nonce = header.nonce[:12]
 
-    aad = message[20:52]
-    enc_data = message[52:] + header.signature
+    aad = bytes(message[20:52])
+    enc_data = bytes(message[52:]) + header.signature
 
     cipher = algorithm(key)
-    return cipher.decrypt(nonce, enc_data, aad)
+    return bytearray(cipher.decrypt(nonce, enc_data, aad))
 
 
 class SHA512HashAlgorithm(HashAlgorithmBase):
@@ -87,19 +87,19 @@ class AES128CCMCipher(CipherBase):
 
     def encrypt(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
-    ) -> bytes:
-        return _encrypt_aes(aead.AESCCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _encrypt_aes(aead.AESCCM, header, message, key)
 
     def decrypt(
         self,
-        key: bytes,
         header: TransformHeader,
-        message: bytes,
-    ) -> bytes:
-        return _decrypt_aes(aead.AESCCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _decrypt_aes(aead.AESCCM, header, message, key)
 
 
 class AES128GCMCipher(CipherBase):
@@ -109,19 +109,19 @@ class AES128GCMCipher(CipherBase):
 
     def encrypt(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
-    ) -> bytes:
-        return _encrypt_aes(aead.AESGCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _encrypt_aes(aead.AESGCM, header, message, key)
 
     def decrypt(
         self,
-        key: bytes,
         header: TransformHeader,
-        message: bytes,
-    ) -> bytes:
-        return _decrypt_aes(aead.AESGCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _decrypt_aes(aead.AESGCM, header, message, key)
 
 
 class AES256CCMCipher(CipherBase):
@@ -131,19 +131,19 @@ class AES256CCMCipher(CipherBase):
 
     def encrypt(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
-    ) -> bytes:
-        return _encrypt_aes(aead.AESCCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _encrypt_aes(aead.AESCCM, header, message, key)
 
     def decrypt(
         self,
-        key: bytes,
         header: TransformHeader,
-        message: bytes,
-    ) -> bytes:
-        return _decrypt_aes(aead.AESCCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _decrypt_aes(aead.AESCCM, header, message, key)
 
 
 class AES256GCMCipher(CipherBase):
@@ -153,19 +153,19 @@ class AES256GCMCipher(CipherBase):
 
     def encrypt(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
-    ) -> bytes:
-        return _encrypt_aes(aead.AESGCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _encrypt_aes(aead.AESGCM, header, message, key)
 
     def decrypt(
         self,
-        key: bytes,
         header: TransformHeader,
-        message: bytes,
-    ) -> bytes:
-        return _decrypt_aes(aead.AESGCM, header, key, message)
+        message: memoryview,
+        key: bytes,
+    ) -> bytearray:
+        return _decrypt_aes(aead.AESGCM, header, message, key)
 
 
 class HMACSHA256SigningAlgorithm(SigningAlgorithmBase):

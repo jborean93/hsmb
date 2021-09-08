@@ -1,14 +1,26 @@
+# -*- coding: utf-8 -*-
+# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
 from hsmb._client import ClientConfig, ClientTransaction, SMBClient
-from hsmb._create import CreateDisposition
+from hsmb._create import CreateDisposition, ShareAccess
 from hsmb._events import (
     ErrorReceived,
     Event,
     FileOpened,
     MessageReceived,
+    Pending,
     ProtocolNegotiated,
     SessionAuthenticated,
     SessionProcessingRequired,
     TreeConnected,
+)
+from hsmb._header import (
+    CompressionChainedPayloadHeader,
+    CompressionPatternPayloadV1,
+    CompressionTransform,
+    CompressionTransformChained,
+    CompressionTransformUnchained,
 )
 from hsmb._negotiate import (
     Cipher,
@@ -29,6 +41,11 @@ __all__ = [
     "ClientTransaction",
     "CompressionAlgorithm",
     "CompressionAlgorithmBase",
+    "CompressionChainedPayloadHeader",
+    "CompressionPatternPayloadV1",
+    "CompressionTransform",
+    "CompressionTransformChained",
+    "CompressionTransformUnchained",
     "CreateDisposition",
     "Dialect",
     "ErrorReceived",
@@ -37,9 +54,11 @@ __all__ = [
     "HashAlgorithm",
     "HashAlgorithmBase",
     "MessageReceived",
+    "Pending",
     "ProtocolNegotiated",
     "SessionAuthenticated",
     "SessionProcessingRequired",
+    "ShareAccess",
     "SigningAlgorithm",
     "SigningAlgorithmBase",
     "SMBClient",

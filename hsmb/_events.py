@@ -42,9 +42,13 @@ class ErrorReceived(Event):
 
     def __repr__(self) -> str:
         return (
-            f"<ErrorReceived command:{self.header.command!s} status:0x{self.header.status:8X} "
+            f"<{type(self).__name__} command:{self.header.command!s} status:0x{self.header.status:08X} "
             f"error:{type(self.error).__name__} {self.error!s}>"
         )
+
+
+class Pending(ErrorReceived):
+    ...
 
 
 class MessageReceived(Event, typing.Generic[MessageType]):

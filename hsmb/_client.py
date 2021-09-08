@@ -34,6 +34,7 @@ from hsmb._events import (
     Event,
     FileOpened,
     MessageReceived,
+    Pending,
     ProtocolNegotiated,
     SessionAuthenticated,
     SessionProcessingRequired,
@@ -211,7 +212,8 @@ class ClientConnection:
     preauth_integrity_hash_id: typing.Optional[HashAlgorithmBase] = None
     preauth_integrity_hash_value: bytes = b""
     cipher_id: typing.Optional[CipherBase] = None
-    compression_ids: typing.List[CompressionAlgorithmBase] = dataclasses.field(default_factory=list)
+    compressor: typing.Optional[CompressionAlgorithmBase] = None
+    compression_ids: typing.List[CompressionAlgorithm] = dataclasses.field(default_factory=list)
     supports_chained_compression: bool = False
     rdma_transform_ids: typing.List[typing.Any] = dataclasses.field(default_factory=list)
     signing_algorithm_id: typing.Optional[SigningAlgorithmBase] = None
@@ -398,8 +400,10 @@ class ClientTransaction:
         messages, self.messages = self.messages, []
         session: typing.Optional[ClientSession] = None
         raw_messages: typing.List[typing.Tuple[SMB2Header, memoryview]] = []
+        compress_hints: typing.List[slice] = []
 
         try:
+            current_offset = 0
             for idx, payload in enumerate(messages):
                 header, message = payload
 
@@ -413,7 +417,9 @@ class ClientTransaction:
                         raise Exception("Failed to find session")
 
                 data = header.pack()
-                data += message.pack(len(data))
+                header_length = len(data)
+                current_offset += header_length
+                data += message.pack(header_length)
 
                 # If this is not the last message add padding to ensure each header is aligned to the 8 byte boundary.
                 if idx != len(messages) - 1:
@@ -435,24 +441,39 @@ class ClientTransaction:
 
                 request = self.connection.outstanding_requests[header.message_id]
                 request.message = bytes(data)
+
+                if message.compress_hint:
+                    compress_hints.append(
+                        slice(
+                            (message.compress_hint.start or 0) + current_offset,
+                            message.compress_hint.stop + current_offset,
+                        )
+                    )
+
                 raw_messages.append((header, memoryview(request.message)))
 
-            if len(raw_messages) == 1 and not self.encrypt and not self.compress:
+            if len(raw_messages) == 1 and not self.encrypt and not self.compress and not compress_hints:
                 # Avoid creating yet another buffer and just append the memoryview
                 self.client._data_to_send.append(raw_messages[0][1])
                 return
 
-            buffer = bytearray().join([m[1] for m in raw_messages])
-            if self.compress:
-                raise NotImplementedError()
+            buffer = bytearray().join(m[1] for m in raw_messages)
+            if self.compress or compress_hints:
+                if not self.connection.compressor:
+                    raise Exception("No compression provider present")
+
+                buffer = self.connection.compressor.compress(
+                    self.connection.compression_ids,
+                    buffer,
+                    compress_hints,
+                    self.connection.supports_chained_compression,
+                )
 
             if session and self.encrypt:
                 if not self.connection.cipher_id:
                     raise Exception("No negotiated cipher to encrypt data with")
 
-                buffer = bytearray(
-                    self.connection.cipher_id.encrypt(session.encryption_key, messages[0][0], bytes(buffer))
-                )
+                buffer = self.connection.cipher_id.encrypt(messages[0][0], memoryview(buffer), session.encryption_key)
 
             self.client._data_to_send.append(buffer)
 
@@ -496,6 +517,7 @@ def refund_credit(
     credit: int,
     charge: int,
 ) -> None:
+    # FIXME: fix up previous seg_id + num_creds if it leads into the refunded value.
     for idx, window in enumerate(connection.sequence_window):
         seq_id, num_creds = window
 
@@ -669,7 +691,8 @@ class SMBClient:
         self,
         data: typing.Union[bytes, bytearray, memoryview],
     ) -> None:
-        self._receive_buffer.append(bytearray(data))
+        if data:
+            self._receive_buffer.append(bytearray(data))
 
     def next_event(
         self,
@@ -688,13 +711,21 @@ class SMBClient:
                 raise Exception("Received encrypted message but no cipher was available for decryption")
 
             session = self.connection.session_table[header.session_id]
-            decrypted_data = self.connection.cipher_id.decrypt(session.decryption_key, header, bytes(raw))
-            del self._receive_buffer[0]
-            self._receive_buffer.insert(0, bytearray(decrypted_data))
-            raw = memoryview(decrypted_data)
+            decrypted_data = self.connection.cipher_id.decrypt(header, raw, session.decryption_key)
+            self._receive_buffer[0] = decrypted_data
+            raw = memoryview(self._receive_buffer[0])
             header, offset = unpack_header(raw)
 
-        elif isinstance(header, SMB1Header):
+        if isinstance(header, CompressionTransform):
+            if not self.connection.compressor:
+                raise Exception("Received compressed message but no compressor was available for decompression")
+
+            decompressed_data = self.connection.compressor.decompress(header)
+            self._receive_buffer[0] = decompressed_data
+            raw = memoryview(self._receive_buffer[0])
+            header, offset = unpack_header(raw)
+
+        if isinstance(header, SMB1Header):
             if header.command != Command.SMB1_NEGOTIATE:
                 raise Exception("Expecting SMB1 NEGOTIATE command")
 
@@ -727,10 +758,17 @@ class SMBClient:
 
         request = self.connection.outstanding_requests[message_id]
         try:
-            return request.receive_callback(header, raw, offset, request.receive_callback_state)
-        finally:
-            del self.connection.outstanding_requests[message_id]
+            if header.flags & HeaderFlags.ASYNC_COMMAND and header.status == NtStatus.STATUS_PENDING:
+                request.async_id = header.async_id
+                err = unpack_error_response(header, raw, offset)[0]
+                return Pending(header, err)
 
+            try:
+                return request.receive_callback(header, raw, offset, request.receive_callback_state)
+            finally:
+                del self.connection.outstanding_requests[message_id]
+
+        finally:
             if next_command:
                 self._receive_buffer[0] = self._receive_buffer[0][next_command:]
             else:
@@ -803,7 +841,7 @@ class SMBClient:
         contexts: typing.List[NegotiateContext] = []
         requested_preauth_algos = {h.algorithm_id(): h for h in self.config.registered_hash_algorithms or []}
         requested_ciphers = {c.cipher_id(): c for c in self.config.registered_ciphers or []}
-        requested_compressors = {c.compression_id(): c for c in self.config.registered_compressors or []}
+        requested_compressor = self.config.registered_compressor
         requested_signers = {s.signing_id(): s for s in self.config.registered_signing_algorithms or []}
 
         if highest_dialect >= Dialect.SMB311:
@@ -820,12 +858,13 @@ class SMBClient:
             if self.config.is_encryption_supported and requested_ciphers:
                 contexts.append(EncryptionCapabilities(ciphers=list(requested_ciphers.keys())))
 
-            if self.config.is_compression_supported and requested_compressors:
+            if self.config.is_compression_supported and requested_compressor:
+                flags = CompressionCapabilityFlags.NONE
+                if requested_compressor.can_chain():
+                    flags |= CompressionCapabilityFlags.CHAINED
+
                 contexts.append(
-                    CompressionCapabilities(
-                        flags=CompressionCapabilityFlags.NONE,
-                        compression_algorithms=list(requested_compressors.keys()),
-                    )
+                    CompressionCapabilities(flags=flags, compression_algorithms=requested_compressor.compression_ids())
                 )
 
             # FIXME: Set based on the config values
@@ -860,7 +899,7 @@ class SMBClient:
             "requested_dialects": requested_dialects,
             "requested_preauth_algos": requested_preauth_algos,
             "requested_ciphers": requested_ciphers,
-            "requested_compressors": requested_compressors,
+            "requested_compressor": requested_compressor,
             "requested_signers": requested_signers,
         }
         request = self.send(msg, callback=_process_negotiate_response, callback_state=callback_state)
@@ -1308,6 +1347,7 @@ class SMBClient:
                 remaining_bytes=0,
                 flags=flags,
                 data=data,
+                compress=compress_write,
             ),
             callback=process,
             callback_state={},
@@ -1338,8 +1378,8 @@ def _process_negotiate_response(
     )
     available_ciphers = {c.cipher_id(): c for c in config.registered_ciphers or []}
     requested_ciphers = typing.cast(typing.Dict[Cipher, typing.Type[CipherBase]], state["requested_ciphers"])
-    requested_compressors = typing.cast(
-        typing.Dict[CompressionAlgorithm, typing.Type[CompressionAlgorithmBase]], state["requested_compressors"]
+    requested_compressor = typing.cast(
+        typing.Optional[typing.Type[CompressionAlgorithmBase]], state["requested_compressor"]
     )
     available_signers = {s.signing_id(): s for s in config.registered_signing_algorithms or []}
     requested_signers = typing.cast(
@@ -1446,14 +1486,21 @@ def _process_negotiate_response(
                     connection.cipher_id = requested_ciphers[cipher_id]()
 
             elif isinstance(context, CompressionCapabilities):
-                if len(context.compression_algorithms) != 1:
+                if len(context.compression_algorithms) == 0:
                     raise Exception(f"Found {len(context.compression_algorithms)} compressors, expecting 1")
 
-                compression_algo = context.compression_algorithms[0]
-                if compression_algo not in requested_compressors:
+                if not requested_compressor:
+                    raise Exception("No compressor was negotiated but received response")
+
+                requested_comp_ids = set(requested_compressor.compression_ids())
+                avail_comp_ids = set(context.compression_algorithms)
+                extra_comp_ids = avail_comp_ids.difference(requested_comp_ids)
+                if extra_comp_ids:
                     raise Exception("Unexpected compression algorithm selected")
 
-                connection.compression_ids = [requested_compressors[compression_algo]()]
+                connection.compressor = requested_compressor()
+                connection.compression_ids = context.compression_algorithms
+                connection.supports_chained_compression = bool(context.flags & CompressionCapabilityFlags.CHAINED)
 
             elif isinstance(context, SigningCapabilities):
                 if len(context.signing_algorithms) != 1:

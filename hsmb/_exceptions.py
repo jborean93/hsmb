@@ -79,7 +79,7 @@ def unpack_error_response(
 ) -> typing.Tuple["ProtocolError", int]:
     view = memoryview(message)[offset:]
 
-    if len(view) < 9:
+    if len(view) < 8:
         raise MalformedPacket("Error response buffer is out of bounds")
 
     context_count = struct.unpack("<B", view[2:3])[0]
@@ -96,9 +96,6 @@ def unpack_error_response(
             raise MalformedPacket("Error response error data is out of bounds")
 
         errors.append(bytes(view[8:end_idx]))
-
-    else:
-        end_idx += 1  # There's always at least 1 NULL byte at the end.
 
     return ProtocolError(header.status, message=context, error_data=errors), end_idx
 

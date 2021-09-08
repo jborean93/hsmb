@@ -95,7 +95,7 @@ class SMBConfig:
 
     registered_hash_algorithms: typing.Optional[typing.List[typing.Type[HashAlgorithmBase]]] = None
     registered_ciphers: typing.Optional[typing.List[typing.Type[CipherBase]]] = None
-    registered_compressors: typing.Optional[typing.List[typing.Type[CompressionAlgorithmBase]]] = None
+    registered_compressor: typing.Optional[typing.Type[CompressionAlgorithmBase]] = None
     registered_signing_algorithms: typing.Optional[typing.List[typing.Type[SigningAlgorithmBase]]] = None
 
     def __post_init__(self) -> None:
@@ -104,9 +104,6 @@ class SMBConfig:
 
         if self.registered_ciphers is None:
             self.registered_ciphers = [AES128GCMCipher, AES128CCMCipher, AES256GCMCipher, AES256CCMCipher]
-
-        if self.registered_compressors is None:
-            self.registered_compressors = []
 
         if self.registered_signing_algorithms is None:
             self.registered_signing_algorithms = [
