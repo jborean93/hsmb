@@ -17,6 +17,7 @@ from hsmb._events import (
 )
 from hsmb._header import (
     CompressionChainedPayloadHeader,
+    CompressionFlags,
     CompressionPatternPayloadV1,
     CompressionTransform,
     CompressionTransformChained,
@@ -42,6 +43,7 @@ __all__ = [
     "CompressionAlgorithm",
     "CompressionAlgorithmBase",
     "CompressionChainedPayloadHeader",
+    "CompressionFlags",
     "CompressionPatternPayloadV1",
     "CompressionTransform",
     "CompressionTransformChained",

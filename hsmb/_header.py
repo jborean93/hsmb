@@ -486,6 +486,9 @@ class CompressionTransformChained(CompressionTransform):
 
     def pack(self) -> bytearray:
         buffer = bytearray()
+        for payload in self.compression_payload_header:
+            buffer += payload.pack()
+
         return bytearray().join(
             [
                 self.protocol_id,

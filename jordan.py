@@ -37,34 +37,111 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
         if not hints:
             hints.append(slice(0, len(data)))
 
-        buffer = bytearray()
+        view = memoryview(data)
         if supports_chaining:
+            pre_consumed = 0
             consumed = 0
-            for hint_slice in hints:
-                start = hint_slice.start or 0
-                stop = hint_slice.stop
+            transformed: typing.List[bytearray] = []
+
+            headers: typing.List[hsmb.CompressionChainedPayloadHeader] = []
+            for hint in hints:
+                start = hint.start or 0
+                stop = hint.stop
 
                 if start > consumed:
-                    # TODO: Add NONE block
-                    buffer += data[consumed : consumed + start]
-                    consumed += consumed + start
+                    headers.append(
+                        hsmb.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
+                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                            data=view[consumed:start],
+                        )
+                    )
+                    pre_consumed = consumed
+                    consumed += start - consumed
 
-            if len(data) > consumed:
-                # TODO: Add NONE block
-                buffer += data[consumed:]
+                plain_length = stop - start
+                if plain_length < 4096:
+                    comp_data = b""  # Causes the below to just append non-compressed data
+                else:
+                    comp_data = self.lz77_huffman.compress(view[start:stop])
 
-                a = ""
+                if comp_data and len(comp_data) < plain_length:
+                    # Compression was successful and smaller, add the compressed data
+                    transformed.append(bytearray(plain_length.to_bytes(4, byteorder="little") + comp_data))
 
-            if len(buffer) > data:
-                buffer = data
+                    headers.append(
+                        hsmb.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.CompressionAlgorithm.LZ77_HUFFMAN,
+                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                            data=memoryview(transformed[-1]),
+                        )
+                    )
+
+                elif headers and headers[-1].compression_algorithm == hsmb.CompressionAlgorithm.NONE:
+                    # The last header was a NONE payload, need to adjust the view to include this next offset
+                    old = headers.pop(-1)
+                    headers.append(
+                        hsmb.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
+                            flags=old.flags,
+                            data=view[pre_consumed:stop],
+                        )
+                    )
+
+                else:
+                    # No last header or it was not a NONE payload, add the new NONE payload with the plaintex data
+                    headers.append(
+                        hsmb.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
+                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                            data=view[start:stop],
+                        )
+                    )
+
+                pre_consumed = start
+                consumed = stop
+
+            if consumed < len(view):
+                headers.append(
+                    hsmb.CompressionChainedPayloadHeader(
+                        compression_algorithm=hsmb.CompressionAlgorithm.NONE,
+                        flags=hsmb.CompressionFlags.NONE,
+                        data=view[consumed:],
+                    )
+                )
+
+            comp_data = hsmb.CompressionTransformChained(
+                original_compressed_segment_size=consumed,
+                compression_payload_header=headers,
+            ).pack()
+
+            if len(comp_data) > consumed:
+                return data
+            else:
+                return comp_data
 
         else:
-            # Can only do 1 block of compression at the end, select the last hint
-            hint_slice = hints[-1]
-            a = ""
+            # Can only do 1 block of compression at the end, select the last hint to compress to the end
+            start = hints[-1].start or 0
 
-        raise NotImplementedError()
-        return buffer
+            final_block = bytearray(view[:start])
+            to_compress = view[start:]
+            to_compress_length = len(to_compress)
+            if to_compress_length < 4096:
+                return data
+
+            comp_data = self.lz77_huffman.compress(to_compress)
+            if len(comp_data) > to_compress_length:
+                return data
+
+            final_block += comp_data
+            return hsmb.CompressionTransformUnchained(
+                original_compressed_segment_size=to_compress_length,
+                compression_algorithm=hsmb.CompressionAlgorithm.LZ77_HUFFMAN,
+                flags=hsmb.CompressionFlags.NONE,
+                offset=start,
+                data=memoryview(final_block),
+            ).pack()
 
     def decompress(
         self,
@@ -158,19 +235,22 @@ async def main() -> None:
     # username = "smbuser"
     # password = "smbpass"
 
-    server = "server2022.domain.test"
-    username = "vagrant-domain@DOMAIN.TEST"
-    password = "VagrantPass1"
+    # server = "server2022.domain.test"
+    # username = "vagrant-domain@DOMAIN.TEST"
+    # password = "VagrantPass1"
+
+    server = "192.168.80.10"
+    username = "vagrant"
+    password = "vagrant"
 
     async with TcpConnection(server, 445) as tcp:
-        conn = hsmb.SMBClient(hsmb.ClientConfig(registered_compressor=XPressHuffman, encrypt_all_requests=False))
+        conn = hsmb.SMBClient(hsmb.ClientConfig(registered_compressor=XPressHuffman, encrypt_all_requests=True))
         conn.negotiate(server)
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
         event = conn.next_event()
         assert isinstance(event, hsmb.ProtocolNegotiated)
-        connection = conn.connection
 
         auth = spnego.client(username, password)
         token = auth.step(event.token)
