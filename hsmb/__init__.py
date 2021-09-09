@@ -15,6 +15,7 @@ from hsmb._events import (
     SessionProcessingRequired,
     TreeConnected,
 )
+from hsmb._exceptions import MalformedPacket
 from hsmb._provider import (
     CompressionProvider,
     EncryptionProvider,
@@ -32,6 +33,7 @@ __all__ = [
     "Event",
     "FileOpened",
     "HashingProvider",
+    "MalformedPacket",
     "MessageReceived",
     "Pending",
     "ProtocolNegotiated",
