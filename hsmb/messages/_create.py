@@ -8,7 +8,7 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
+from hsmb.messages._messages import Command, SMBMessage
 
 
 class RequestedOplockLevel(enum.IntEnum):
@@ -192,11 +192,11 @@ class CreateRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["CreateRequest", int]:
+    ) -> "CreateRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 57:
-            raise MalformedPacket("Create request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         security_flags = struct.unpack("<B", view[2:3])[0]
         requested_oplock_level = RequestedOplockLevel(struct.unpack("<B", view[3:4])[0])
@@ -217,7 +217,7 @@ class CreateRequest(SMBMessage):
         if name_length:
             name_end = name_offset + name_length
             if len(view) < name_end:
-                raise MalformedPacket("Create request name buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} buffer is out of bounds")
 
             name = bytes(view[name_offset:name_end]).decode("utf-16-le")
 
@@ -226,24 +226,21 @@ class CreateRequest(SMBMessage):
         if contexts_length:
             contexts_end = contexts_offset + contexts_length
             if len(view) < contexts_end:
-                raise MalformedPacket("Create request create contexts buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} contexts buffer is out of bounds")
             # FIXME: unpack contexts
 
-        return (
-            cls(
-                requested_oplock_level=requested_oplock_level,
-                impersonation_level=impersonation_level,
-                desired_access=desired_access,
-                file_attributes=file_attributes,
-                share_access=share_access,
-                create_disposition=create_disposition,
-                create_options=create_options,
-                name=name,
-                create_contexts=contexts,
-                security_flags=security_flags,
-                smb_create_flags=smb_create_flags,
-            ),
-            56 + max(name_end, contexts_end, 1),
+        return CreateRequest(
+            requested_oplock_level=requested_oplock_level,
+            impersonation_level=impersonation_level,
+            desired_access=desired_access,
+            file_attributes=file_attributes,
+            share_access=share_access,
+            create_disposition=create_disposition,
+            create_options=create_options,
+            name=name,
+            create_contexts=contexts,
+            security_flags=security_flags,
+            smb_create_flags=smb_create_flags,
         )
 
 
@@ -357,11 +354,11 @@ class CreateResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["CreateResponse", int]:
+    ) -> "CreateResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 88:
-            raise MalformedPacket("Create response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         oplock_level = RequestedOplockLevel(struct.unpack("<B", view[2:3])[0])
         flags = CreateResponseFlags(struct.unpack("<B", view[3:4])[0])
@@ -382,25 +379,22 @@ class CreateResponse(SMBMessage):
         if contexts_length:
             end_idx = contexts_offset + contexts_length
             if len(view) < end_idx:
-                raise MalformedPacket("Create response create contexts buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} context buffer is out of bounds")
             # FIXME: unpack contexts
 
-        return (
-            cls(
-                oplock_level=oplock_level,
-                flags=flags,
-                create_action=create_action,
-                creation_time=creation_time,
-                last_access_time=last_access_time,
-                last_write_time=last_write_time,
-                change_time=change_time,
-                allocation_size=allocation_size,
-                end_of_file=end_of_file,
-                file_attributes=file_attributes,
-                file_id=file_id,
-                create_contexts=contexts,
-            ),
-            end_idx,
+        return CreateResponse(
+            oplock_level=oplock_level,
+            flags=flags,
+            create_action=create_action,
+            creation_time=creation_time,
+            last_access_time=last_access_time,
+            last_write_time=last_write_time,
+            change_time=change_time,
+            allocation_size=allocation_size,
+            end_of_file=end_of_file,
+            file_attributes=file_attributes,
+            file_id=file_id,
+            create_contexts=contexts,
         )
 
 
@@ -440,16 +434,16 @@ class CloseRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["CloseRequest", int]:
+    ) -> "CloseRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
-            raise MalformedPacket("Close request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         flags = CloseFlags(struct.unpack("<H", view[2:4])[0])
         file_id = bytes(view[8:24])
 
-        return cls(flags=flags, file_id=file_id), 24
+        return CloseRequest(flags=flags, file_id=file_id)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -521,11 +515,11 @@ class CloseResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["CloseResponse", int]:
+    ) -> "CloseResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 60:
-            raise MalformedPacket("Close response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         flags = CloseFlags(struct.unpack("<H", view[2:4])[0])
         creation_time = struct.unpack("<Q", view[8:16])[0]
@@ -535,16 +529,13 @@ class CloseResponse(SMBMessage):
         allocation_size = struct.unpack("<Q", view[40:48])[0]
         end_of_file = struct.unpack("<Q", view[48:56])[0]
         file_attributes = struct.unpack("<I", view[56:60])[0]
-        return (
-            cls(
-                flags=flags,
-                creation_time=creation_time,
-                last_access_time=last_access_time,
-                last_write_time=last_write_time,
-                change_time=change_time,
-                allocation_size=allocation_size,
-                end_of_file=end_of_file,
-                file_attributes=file_attributes,
-            ),
-            60,
+        return CloseResponse(
+            flags=flags,
+            creation_time=creation_time,
+            last_access_time=last_access_time,
+            last_write_time=last_write_time,
+            change_time=change_time,
+            allocation_size=allocation_size,
+            end_of_file=end_of_file,
+            file_attributes=file_attributes,
         )

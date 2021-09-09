@@ -7,7 +7,7 @@ import struct
 import typing
 
 if typing.TYPE_CHECKING:
-    from hsmb._header import SMB2Header
+    from hsmb.messages._header import SMB2Header
 
 
 class NtStatus(enum.IntEnum):
@@ -76,7 +76,7 @@ def unpack_error_response(
     message: typing.Union[bytes, bytearray, memoryview],
     offset: int = 0,
     context: typing.Optional[str] = None,
-) -> typing.Tuple["ProtocolError", int]:
+) -> "ProtocolError":
     view = memoryview(message)[offset:]
 
     if len(view) < 8:
@@ -97,7 +97,7 @@ def unpack_error_response(
 
         errors.append(bytes(view[8:end_idx]))
 
-    return ProtocolError(header.status, message=context, error_data=errors), end_idx
+    return ProtocolError(header.status, message=context, error_data=errors)
 
 
 class SMBError(Exception):

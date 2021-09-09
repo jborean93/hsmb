@@ -18,13 +18,13 @@ from hsmb._crypto import (
     HMACSHA256SigningAlgorithm,
     SHA512HashAlgorithm,
 )
-from hsmb._negotiate import (
-    CipherBase,
-    CompressionAlgorithmBase,
-    Dialect,
-    HashAlgorithmBase,
-    SigningAlgorithmBase,
+from hsmb._provider import (
+    CompressionProvider,
+    EncryptionProvider,
+    HashingProvider,
+    SigningProvider,
 )
+from hsmb.messages import Dialect
 
 if typing.TYPE_CHECKING:
     from hsmb._client import ClientConnection, ClientServer, ClientShare
@@ -93,23 +93,23 @@ class SMBConfig:
     is_rdma_transform_supported: bool = True
     disable_encryption_over_secure_transport: bool = True
 
-    registered_hash_algorithms: typing.Optional[typing.List[typing.Type[HashAlgorithmBase]]] = None
-    registered_ciphers: typing.Optional[typing.List[typing.Type[CipherBase]]] = None
-    registered_compressor: typing.Optional[typing.Type[CompressionAlgorithmBase]] = None
-    registered_signing_algorithms: typing.Optional[typing.List[typing.Type[SigningAlgorithmBase]]] = None
+    registered_hash_algorithms: typing.Optional[typing.List[HashingProvider]] = None
+    registered_ciphers: typing.Optional[typing.List[EncryptionProvider]] = None
+    registered_compressor: typing.Optional[CompressionProvider] = None
+    registered_signing_algorithms: typing.Optional[typing.List[SigningProvider]] = None
 
     def __post_init__(self) -> None:
         if self.registered_hash_algorithms is None:
-            self.registered_hash_algorithms = [SHA512HashAlgorithm]
+            self.registered_hash_algorithms = [SHA512HashAlgorithm()]
 
         if self.registered_ciphers is None:
-            self.registered_ciphers = [AES128GCMCipher, AES128CCMCipher, AES256GCMCipher, AES256CCMCipher]
+            self.registered_ciphers = [AES128GCMCipher(), AES128CCMCipher(), AES256GCMCipher(), AES256CCMCipher()]
 
         if self.registered_signing_algorithms is None:
             self.registered_signing_algorithms = [
-                AESGMACSigningAlgorithm,
-                AESCMACSigningAlgorithm,
-                HMACSHA256SigningAlgorithm,
+                AESGMACSigningAlgorithm(),
+                AESCMACSigningAlgorithm(),
+                HMACSHA256SigningAlgorithm(),
             ]
 
 

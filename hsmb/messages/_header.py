@@ -9,8 +9,8 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command
-from hsmb._negotiate import CompressionAlgorithm
+from hsmb.messages._messages import Command
+from hsmb.messages._negotiate import CompressionAlgorithm
 
 
 class HeaderFlags(enum.IntFlag):
@@ -75,7 +75,43 @@ class SMBHeader:
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
     ) -> typing.Tuple["SMBHeader", int]:
-        raise NotImplementedError()
+        """Unpack the SMB Header bytes.
+
+        Unpacks the SMB header bytes value to the object it represents. The
+        value is unpacked according to the protocol id specified in the first 4
+        bytes of the data.
+
+        Args:
+            data: The data to unpack.
+            offset: The offset of the data to start the unpacking from.
+
+        Returns:
+            Tuple[SMBHeader, int]: The unpacked header and the length of the
+            header that was unpacked.
+
+        Raises:
+            MalformedPacket: The input data is either not large enough or is not in
+            a format expected for a SMB header.
+        """
+        view = memoryview(data)
+
+        if len(view) < 4:
+            raise MalformedPacket(f"Not enough data to unpack SMB header payload")
+
+        protocol_id = bytes(view[:4])
+        header_cls: typing.Type[SMBHeader]
+        if protocol_id == b"\xFFSMB":
+            header_cls = SMB1Header
+        elif protocol_id == b"\xFESMB":
+            header_cls = SMB2Header
+        elif protocol_id == b"\xFDSMB":
+            header_cls = TransformHeader
+        elif protocol_id == b"\xFCSMB":
+            header_cls = CompressionTransform
+        else:
+            raise MalformedPacket(f"Unknown SMB Header protocol id {base64.b16encode(protocol_id).decode()}")
+
+        return header_cls.unpack(data)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -143,6 +179,9 @@ class SMB1Header(SMBHeader):
         offset: int = 0,
     ) -> typing.Tuple["SMB1Header", int]:
         view = memoryview(data)[offset:]
+
+        if len(view) < 32:
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         command = struct.unpack("B", view[4:5])[0]
         status = struct.unpack("<I", view[5:9])[0]
@@ -267,6 +306,9 @@ class SMB2Header(SMBHeader):
     ) -> typing.Tuple["SMB2Header", int]:
         view = memoryview(data)[offset:]
 
+        if len(view) < 64:
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
+
         credit_charge = struct.unpack("<H", view[6:8])[0]
         channel_sequence = struct.unpack("<H", view[8:10])[0]
         status = struct.unpack("<I", view[8:12])[0]
@@ -352,6 +394,9 @@ class TransformHeader(SMBHeader):
     ) -> typing.Tuple["TransformHeader", int]:
         view = memoryview(data)[offset:]
 
+        if len(view) < 52:
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
+
         signature = bytes(view[4:20])
         nonce = bytes(view[20:36])
         original_message_size = struct.unpack("<I", view[36:40])[0]
@@ -393,7 +438,7 @@ class CompressionTransform(SMBHeader):
         view = memoryview(data)[offset:]
 
         if len(view) < 12:
-            raise MalformedPacket("Compression transform header payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         flags = CompressionFlags(struct.unpack("<H", view[10:12])[0])
         if flags & CompressionFlags.CHAINED:
@@ -449,7 +494,7 @@ class CompressionTransformUnchained(CompressionTransform):
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
-            raise MalformedPacket("Compression transform header payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         original_compressed_segment_size = struct.unpack("<I", view[4:8])[0]
         compression_algorithm = CompressionAlgorithm(struct.unpack("<H", view[8:10])[0])
@@ -506,7 +551,7 @@ class CompressionTransformChained(CompressionTransform):
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
-            raise MalformedPacket("Compression transform header payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         original_compressed_segment_size = struct.unpack("<I", view[4:8])[0]
         payloads: typing.List["CompressionChainedPayloadHeader"] = []
@@ -564,14 +609,14 @@ class CompressionChainedPayloadHeader:
         view = memoryview(data[offset:])
 
         if len(view) < 8:
-            raise MalformedPacket("Compression transform header payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         compression_algorithm = CompressionAlgorithm(struct.unpack("<H", view[0:2])[0])
         flags = CompressionFlags(struct.unpack("<H", view[2:4])[0])
         length = struct.unpack("<I", view[4:8])[0]
 
         if len(view) < 8 + length:
-            raise MalformedPacket("Compression transform chained header payload out of bounds")
+            raise MalformedPacket(f"Data for {cls.__name__} is out of bounds")
         end_idx = 8 + length
 
         return (
@@ -619,43 +664,9 @@ class CompressionPatternPayloadV1:
         view = memoryview(data)[offset:]
 
         if len(view) < 8:
-            raise MalformedPacket("Compression pattern payload v1 is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         pattern = struct.unpack("<B", view[:1])[0]
         repetitions = struct.unpack("<I", view[4:8])[0]
 
-        return cls(pattern=pattern, repetitions=repetitions), 8
-
-
-def unpack_header(
-    data: typing.Union[bytes, bytearray, memoryview],
-) -> typing.Tuple[SMBHeader, int]:
-    """Unpack the SMB Header bytes.
-
-    Unpacks the SMB header bytes value to the object it represents. The
-    value is unpacked according to the protocol id specified in the first 4
-    bytes of the data.
-
-    Args:
-        data: The data to unpack.
-
-    Returns:
-        Tuple[SMBHeader, int]: The unpacked header and the length of the
-        header that was unpacked.
-    """
-    view = memoryview(data)
-
-    protocol_id = bytes(view[:4])
-    header_cls: typing.Type[SMBHeader]
-    if protocol_id == b"\xFFSMB":
-        header_cls = SMB1Header
-    elif protocol_id == b"\xFESMB":
-        header_cls = SMB2Header
-    elif protocol_id == b"\xFDSMB":
-        header_cls = TransformHeader
-    elif protocol_id == b"\xFCSMB":
-        header_cls = CompressionTransform
-    else:
-        raise ValueError(f"Unknown SMB Header protocol {base64.b16encode(protocol_id).decode()}")
-
-    return header_cls.unpack(data)
+        return CompressionPatternPayloadV1(pattern=pattern, repetitions=repetitions), 8

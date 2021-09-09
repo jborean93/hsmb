@@ -9,8 +9,8 @@ import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
-from hsmb._negotiate import Capabilities, Dialect, SecurityModes
+from hsmb.messages._messages import Command, SMBMessage
+from hsmb.messages._negotiate import Capabilities, Dialect, SecurityModes
 
 
 class CtlCode(enum.IntEnum):
@@ -87,7 +87,7 @@ class ValidateNegotiateInfoRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
-            raise MalformedPacket("Validate negotiate info request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         capabilities = Capabilities(struct.unpack("<I", view[0:4])[0])
         guid = uuid.UUID(bytes_le=bytes(view[4:20]))
@@ -95,7 +95,7 @@ class ValidateNegotiateInfoRequest:
         dialect_count = struct.unpack("<H", view[22:24])[0]
 
         if len(view) < (24 + (dialect_count * 2)):
-            raise MalformedPacket("Validate negotiate info request dialect buffer is out of bounds")
+            raise MalformedPacket(f"{cls.__name__} dialect buffer is out of bounds")
 
         end_idx = 24
         dialects: typing.List[Dialect] = []
@@ -103,7 +103,9 @@ class ValidateNegotiateInfoRequest:
             dialects.append(Dialect(struct.unpack("<H", view[end_idx : end_idx + 2])[0]))
             end_idx += 2
 
-        return cls(capabilities=capabilities, guid=guid, security_mode=security_mode, dialects=dialects)
+        return ValidateNegotiateInfoRequest(
+            capabilities=capabilities, guid=guid, security_mode=security_mode, dialects=dialects
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -155,14 +157,16 @@ class ValidateNegotiateInfoResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
-            raise MalformedPacket("Validate negotiate info response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         capabilities = Capabilities(struct.unpack("<I", view[0:4])[0])
         guid = uuid.UUID(bytes_le=bytes(view[4:20]))
         security_mode = SecurityModes(struct.unpack("<H", view[20:22])[0])
         dialect = Dialect(struct.unpack("<H", view[22:24])[0])
 
-        return cls(capabilities=capabilities, guid=guid, security_mode=security_mode, dialect=dialect)
+        return ValidateNegotiateInfoResponse(
+            capabilities=capabilities, guid=guid, security_mode=security_mode, dialect=dialect
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -239,11 +243,11 @@ class IOCTLRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["IOCTLRequest", int]:
+    ) -> "IOCTLRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 56:
-            raise MalformedPacket("IOCTL request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         ctl_code = struct.unpack("<I", view[4:8])[0]
         file_id = bytes(view[8:24])
@@ -259,7 +263,7 @@ class IOCTLRequest(SMBMessage):
         input_end = 0
         if input_count:
             if len(view) < (input_offset + input_count):
-                raise MalformedPacket("IOCTL request input buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} input buffer is out of bounds")
 
             input_end = input_offset + input_count
             input = bytes(view[input_offset:input_end])
@@ -268,22 +272,19 @@ class IOCTLRequest(SMBMessage):
         output_end = 0
         if output_count:
             if len(view) < (output_offset + output_count):
-                raise MalformedPacket("IOCTL request output buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} output buffer is out of bounds")
 
             output_end = output_offset + output_count
             output = bytes(view[output_offset:output_end])
 
-        return (
-            cls(
-                ctl_code=ctl_code,
-                file_id=file_id,
-                flags=flags,
-                max_input_response=max_input_response,
-                max_output_response=max_output_response,
-                input=input,
-                output=output,
-            ),
-            59 + max(output_end, input_end),
+        return IOCTLRequest(
+            ctl_code=ctl_code,
+            file_id=file_id,
+            flags=flags,
+            max_input_response=max_input_response,
+            max_output_response=max_output_response,
+            input=input,
+            output=output,
         )
 
 
@@ -353,11 +354,11 @@ class IOCTLResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["IOCTLResponse", int]:
+    ) -> "IOCTLResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 48:
-            raise MalformedPacket("IOCTL request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         ctl_code = struct.unpack("<I", view[4:8])[0]
         file_id = bytes(view[8:24])
@@ -371,7 +372,7 @@ class IOCTLResponse(SMBMessage):
         input_end = 0
         if input_count:
             if len(view) < (input_offset + input_count):
-                raise MalformedPacket("IOCTL response input buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} input buffer is out of bounds")
 
             input_end = input_offset + input_count
             input = bytes(view[input_offset:input_end])
@@ -380,18 +381,15 @@ class IOCTLResponse(SMBMessage):
         output_end = 0
         if output_count:
             if len(view) < (output_offset + output_count):
-                raise MalformedPacket("IOCTL response output buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} output buffer is out of bounds")
 
             output_end = output_offset + output_count
             output = bytes(view[output_offset:output_end])
 
-        return (
-            cls(
-                ctl_code=ctl_code,
-                file_id=file_id,
-                flags=flags,
-                input=input,
-                output=output,
-            ),
-            49 + max(output_end, input_end),
+        return IOCTLResponse(
+            ctl_code=ctl_code,
+            file_id=file_id,
+            flags=flags,
+            input=input,
+            output=output,
         )

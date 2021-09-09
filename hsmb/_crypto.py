@@ -12,22 +12,23 @@ from cryptography.hazmat.primitives import cmac, hashes
 from cryptography.hazmat.primitives.ciphers import aead, algorithms
 from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC, CounterLocation, Mode
 
-from hsmb._header import HeaderFlags, SMB2Header, TransformFlags, TransformHeader
-from hsmb._messages import Command
-from hsmb._negotiate import (
+from hsmb._provider import EncryptionProvider, HashingProvider, SigningProvider
+from hsmb.messages import (
     Cipher,
-    CipherBase,
+    Command,
     HashAlgorithm,
-    HashAlgorithmBase,
+    HeaderFlags,
     SigningAlgorithm,
-    SigningAlgorithmBase,
+    SMB2Header,
+    TransformFlags,
+    TransformHeader,
 )
 
 
 def _encrypt_aes(
     algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
     header: SMB2Header,
-    message: memoryview,
+    message: bytearray,
     key: bytes,
 ) -> bytearray:
     if algorithm == aead.AESCCM:
@@ -56,7 +57,7 @@ def _encrypt_aes(
 def _decrypt_aes(
     algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
     header: TransformHeader,
-    message: memoryview,
+    message: bytearray,
     key: bytes,
 ) -> bytearray:
     if algorithm == aead.AESCCM:
@@ -71,147 +72,150 @@ def _decrypt_aes(
     return bytearray(cipher.decrypt(nonce, enc_data, aad))
 
 
-class SHA512HashAlgorithm(HashAlgorithmBase):
-    @classmethod
-    def algorithm_id(cls) -> HashAlgorithm:
+class SHA512HashAlgorithm(HashingProvider):
+    @property
+    def algorithm_id(self) -> HashAlgorithm:
         return HashAlgorithm.SHA512
 
-    def hash(self, data: bytes) -> bytes:
+    def hash(
+        self,
+        data: bytes,
+    ) -> bytes:
         return hashlib.sha512(data).digest()
 
 
-class AES128CCMCipher(CipherBase):
-    @classmethod
+class AES128CCMCipher(EncryptionProvider):
+    @property
     def cipher_id(self) -> Cipher:
         return Cipher.AES128_CCM
 
     def encrypt(
         self,
         header: SMB2Header,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _encrypt_aes(aead.AESCCM, header, message, key)
+        return _encrypt_aes(aead.AESCCM, header, data, key)
 
     def decrypt(
         self,
         header: TransformHeader,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _decrypt_aes(aead.AESCCM, header, message, key)
+        return _decrypt_aes(aead.AESCCM, header, data, key)
 
 
-class AES128GCMCipher(CipherBase):
-    @classmethod
+class AES128GCMCipher(EncryptionProvider):
+    @property
     def cipher_id(self) -> Cipher:
         return Cipher.AES128_GCM
 
     def encrypt(
         self,
         header: SMB2Header,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _encrypt_aes(aead.AESGCM, header, message, key)
+        return _encrypt_aes(aead.AESGCM, header, data, key)
 
     def decrypt(
         self,
         header: TransformHeader,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _decrypt_aes(aead.AESGCM, header, message, key)
+        return _decrypt_aes(aead.AESGCM, header, data, key)
 
 
-class AES256CCMCipher(CipherBase):
-    @classmethod
+class AES256CCMCipher(EncryptionProvider):
+    @property
     def cipher_id(self) -> Cipher:
         return Cipher.AES256_CCM
 
     def encrypt(
         self,
         header: SMB2Header,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _encrypt_aes(aead.AESCCM, header, message, key)
+        return _encrypt_aes(aead.AESCCM, header, data, key)
 
     def decrypt(
         self,
         header: TransformHeader,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _decrypt_aes(aead.AESCCM, header, message, key)
+        return _decrypt_aes(aead.AESCCM, header, data, key)
 
 
-class AES256GCMCipher(CipherBase):
-    @classmethod
+class AES256GCMCipher(EncryptionProvider):
+    @property
     def cipher_id(self) -> Cipher:
         return Cipher.AES256_GCM
 
     def encrypt(
         self,
         header: SMB2Header,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _encrypt_aes(aead.AESGCM, header, message, key)
+        return _encrypt_aes(aead.AESGCM, header, data, key)
 
     def decrypt(
         self,
         header: TransformHeader,
-        message: memoryview,
+        data: bytearray,
         key: bytes,
     ) -> bytearray:
-        return _decrypt_aes(aead.AESGCM, header, message, key)
+        return _decrypt_aes(aead.AESGCM, header, data, key)
 
 
-class HMACSHA256SigningAlgorithm(SigningAlgorithmBase):
-    @classmethod
-    def signing_id(cls) -> SigningAlgorithm:
+class HMACSHA256SigningAlgorithm(SigningProvider):
+    @property
+    def signing_id(self) -> SigningAlgorithm:
         return SigningAlgorithm.HMAC_SHA256
 
     def sign(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
+        data: bytearray,
+        key: bytes,
     ) -> bytes:
-        hmac_algo = hmac.new(key, message, digestmod=hashlib.sha256)
+        hmac_algo = hmac.new(key, data, digestmod=hashlib.sha256)
         return hmac_algo.digest()[:16]
 
 
-class AESCMACSigningAlgorithm(SigningAlgorithmBase):
-    @classmethod
-    def signing_id(cls) -> SigningAlgorithm:
+class AESCMACSigningAlgorithm(SigningProvider):
+    @property
+    def signing_id(self) -> SigningAlgorithm:
         return SigningAlgorithm.AES_CMAC
 
     def sign(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
+        data: bytearray,
+        key: bytes,
     ) -> bytes:
         c = cmac.CMAC(
             algorithms.AES(key),
             backend=default_backend(),  # type: ignore[no-untyped-call]
         )
-        c.update(message)
+        c.update(bytes(data))
         return c.finalize()
 
 
-class AESGMACSigningAlgorithm(SigningAlgorithmBase):
-    @classmethod
-    def signing_id(cls) -> SigningAlgorithm:
+class AESGMACSigningAlgorithm(SigningProvider):
+    @property
+    def signing_id(self) -> SigningAlgorithm:
         return SigningAlgorithm.AES_GMAC
 
     def sign(
         self,
-        key: bytes,
         header: SMB2Header,
-        message: bytes,
+        data: bytearray,
+        key: bytes,
     ) -> bytes:
         message_info = 0
         if header.flags & HeaderFlags.SERVER_TO_REDIR:
@@ -229,7 +233,7 @@ class AESGMACSigningAlgorithm(SigningAlgorithmBase):
         # Unlike AES CMAC there is no GMAC equivalent class in Cryptography. To achieve the same thing encrypt a blank
         # set of data and include the message as additional authenticated data. The return value contains the tag which
         # is the signature. https://stackoverflow.com/questions/26003702/does-openssl-have-gmac-api-and-examples
-        signature = aead.AESGCM(key).encrypt(nonce, b"", message)
+        signature = aead.AESGCM(key).encrypt(nonce, b"", data)
 
         return signature
 

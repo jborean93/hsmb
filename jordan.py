@@ -8,13 +8,13 @@ import xca
 import hsmb
 
 
-class XPressHuffman(hsmb.CompressionAlgorithmBase):
+class XPressHuffman(hsmb.CompressionProvider):
     def __init__(self) -> None:
         self.lz77_huffman = xca.XpressHuffman()
 
-    @classmethod
-    def compression_ids(cls) -> typing.List[hsmb.CompressionAlgorithm]:
-        return [hsmb.CompressionAlgorithm.LZ77_HUFFMAN]
+    @property
+    def compression_ids(self) -> typing.List[hsmb.messages.CompressionAlgorithm]:
+        return [hsmb.messages.CompressionAlgorithm.LZ77_HUFFMAN]
 
     @classmethod
     def can_chain(cls) -> bool:
@@ -22,12 +22,12 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
 
     def compress(
         self,
-        algorithms: typing.List[hsmb.CompressionAlgorithm],
+        algorithms: typing.List[hsmb.messages.CompressionAlgorithm],
         data: bytearray,
         hints: typing.List[slice],
         supports_chaining: bool,
     ) -> bytearray:
-        if hsmb.CompressionAlgorithm.LZ77_HUFFMAN not in algorithms:
+        if hsmb.messages.CompressionAlgorithm.LZ77_HUFFMAN not in algorithms:
             raise Exception("Requested algorithm is not supported")
 
         # Windows only compresses the data if it's more than 4KiB
@@ -43,16 +43,18 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
             consumed = 0
             transformed: typing.List[bytearray] = []
 
-            headers: typing.List[hsmb.CompressionChainedPayloadHeader] = []
+            headers: typing.List[hsmb.messages.CompressionChainedPayloadHeader] = []
             for hint in hints:
                 start = hint.start or 0
                 stop = hint.stop
 
                 if start > consumed:
                     headers.append(
-                        hsmb.CompressionChainedPayloadHeader(
-                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
-                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                        hsmb.messages.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.messages.CompressionAlgorithm.NONE,
+                            flags=hsmb.messages.CompressionFlags.NONE
+                            if len(headers)
+                            else hsmb.messages.CompressionFlags.CHAINED,
                             data=view[consumed:start],
                         )
                     )
@@ -70,19 +72,21 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
                     transformed.append(bytearray(plain_length.to_bytes(4, byteorder="little") + comp_data))
 
                     headers.append(
-                        hsmb.CompressionChainedPayloadHeader(
-                            compression_algorithm=hsmb.CompressionAlgorithm.LZ77_HUFFMAN,
-                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                        hsmb.messages.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.messages.CompressionAlgorithm.LZ77_HUFFMAN,
+                            flags=hsmb.messages.CompressionFlags.NONE
+                            if len(headers)
+                            else hsmb.messages.CompressionFlags.CHAINED,
                             data=memoryview(transformed[-1]),
                         )
                     )
 
-                elif headers and headers[-1].compression_algorithm == hsmb.CompressionAlgorithm.NONE:
+                elif headers and headers[-1].compression_algorithm == hsmb.messages.CompressionAlgorithm.NONE:
                     # The last header was a NONE payload, need to adjust the view to include this next offset
                     old = headers.pop(-1)
                     headers.append(
-                        hsmb.CompressionChainedPayloadHeader(
-                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
+                        hsmb.messages.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.messages.CompressionAlgorithm.NONE,
                             flags=old.flags,
                             data=view[pre_consumed:stop],
                         )
@@ -91,9 +95,11 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
                 else:
                     # No last header or it was not a NONE payload, add the new NONE payload with the plaintex data
                     headers.append(
-                        hsmb.CompressionChainedPayloadHeader(
-                            compression_algorithm=hsmb.CompressionAlgorithm.NONE,
-                            flags=hsmb.CompressionFlags.NONE if len(headers) else hsmb.CompressionFlags.CHAINED,
+                        hsmb.messages.CompressionChainedPayloadHeader(
+                            compression_algorithm=hsmb.messages.CompressionAlgorithm.NONE,
+                            flags=hsmb.messages.CompressionFlags.NONE
+                            if len(headers)
+                            else hsmb.messages.CompressionFlags.CHAINED,
                             data=view[start:stop],
                         )
                     )
@@ -103,14 +109,14 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
 
             if consumed < len(view):
                 headers.append(
-                    hsmb.CompressionChainedPayloadHeader(
-                        compression_algorithm=hsmb.CompressionAlgorithm.NONE,
-                        flags=hsmb.CompressionFlags.NONE,
+                    hsmb.messages.CompressionChainedPayloadHeader(
+                        compression_algorithm=hsmb.messages.CompressionAlgorithm.NONE,
+                        flags=hsmb.messages.CompressionFlags.NONE,
                         data=view[consumed:],
                     )
                 )
 
-            comp_data = hsmb.CompressionTransformChained(
+            comp_data = hsmb.messages.CompressionTransformChained(
                 original_compressed_segment_size=consumed,
                 compression_payload_header=headers,
             ).pack()
@@ -135,27 +141,27 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
                 return data
 
             final_block += comp_data
-            return hsmb.CompressionTransformUnchained(
+            return hsmb.messages.CompressionTransformUnchained(
                 original_compressed_segment_size=to_compress_length,
-                compression_algorithm=hsmb.CompressionAlgorithm.LZ77_HUFFMAN,
-                flags=hsmb.CompressionFlags.NONE,
+                compression_algorithm=hsmb.messages.CompressionAlgorithm.LZ77_HUFFMAN,
+                flags=hsmb.messages.CompressionFlags.NONE,
                 offset=start,
                 data=memoryview(final_block),
             ).pack()
 
     def decompress(
         self,
-        header: hsmb.CompressionTransform,
+        header: hsmb.messages.CompressionTransform,
     ) -> bytearray:
         buffer = bytearray()
-        if isinstance(header, hsmb.CompressionTransformChained):
+        if isinstance(header, hsmb.messages.CompressionTransformChained):
             for chain in header.compression_payload_header:
                 buffer += self._decompress_data(chain.data, chain.compression_algorithm)
 
             if len(buffer) != header.original_compressed_segment_size:
                 raise Exception("Decompressed data does not match expected size")
 
-        elif isinstance(header, hsmb.CompressionTransformUnchained):
+        elif isinstance(header, hsmb.messages.CompressionTransformUnchained):
             buffer += header.data[: header.offset]
             buffer += self._decompress_data(
                 header.data[header.offset :],
@@ -168,13 +174,13 @@ class XPressHuffman(hsmb.CompressionAlgorithmBase):
     def _decompress_data(
         self,
         data: memoryview,
-        algorithm: hsmb.CompressionAlgorithm,
+        algorithm: hsmb.messages.CompressionAlgorithm,
         length: int = 0,
     ) -> bytes:
-        if algorithm == hsmb.CompressionAlgorithm.NONE:
+        if algorithm == hsmb.messages.CompressionAlgorithm.NONE:
             return bytes(data)
 
-        elif algorithm == hsmb.CompressionAlgorithm.LZ77_HUFFMAN:
+        elif algorithm == hsmb.messages.CompressionAlgorithm.LZ77_HUFFMAN:
             if not length:
                 length = struct.unpack("<I", data[0:4])[0]
                 data = data[4:]
@@ -231,26 +237,33 @@ class TcpConnection:
 
 
 async def main() -> None:
-    # server = "127.0.0.1"
-    # username = "smbuser"
-    # password = "smbpass"
+    server = "127.0.0.1"
+    username = "smbuser"
+    password = "smbpass"
 
     # server = "server2022.domain.test"
     # username = "vagrant-domain@DOMAIN.TEST"
     # password = "VagrantPass1"
 
-    server = "192.168.80.10"
-    username = "vagrant"
-    password = "vagrant"
+    # server = "192.168.80.10"
+    # username = "vagrant"
+    # password = "vagrant"
 
     async with TcpConnection(server, 445) as tcp:
-        conn = hsmb.SMBClient(hsmb.ClientConfig(registered_compressor=XPressHuffman, encrypt_all_requests=True))
+        conn = hsmb.SMBClient(
+            hsmb.ClientConfig(
+                registered_compressor=XPressHuffman(),
+                encrypt_all_requests=False,
+                compress_all_requests=False,
+            )
+        )
         conn.negotiate(server)
 
         await tcp.send(conn.data_to_send())
         conn.receive_data(await tcp.recv())
         event = conn.next_event()
         assert isinstance(event, hsmb.ProtocolNegotiated)
+        connection = event.connection
 
         auth = spnego.client(username, password)
         token = auth.step(event.token)
@@ -283,71 +296,70 @@ async def main() -> None:
             tree_id = event.tree.tree_connect_id
             try:
 
-                conn.create(
-                    tree_id,
-                    session_id,
-                    "large.vhdx",
-                    hsmb.CreateDisposition.OPEN,
-                    desired_access=0x02000000,
-                    share_access=hsmb.ShareAccess.READ,
-                )
-                await tcp.send(conn.data_to_send())
-                while True:
-                    event = conn.next_event()
-                    if not event:
+                if connection.compression_ids:
+                    conn.create(
+                        tree_id,
+                        session_id,
+                        "large.vhdx",
+                        hsmb.messages.CreateDisposition.OPEN,
+                        desired_access=0x02000000,
+                        share_access=hsmb.messages.ShareAccess.READ,
+                    )
+                    await tcp.send(conn.data_to_send())
+                    while True:
+                        event = conn.next_event()
+                        if not event:
+                            conn.receive_data(await tcp.recv())
+                        elif isinstance(event, hsmb.FileOpened):
+                            break
+
+                    file_open = event.open
+                    try:
+                        conn.read(file_open, 0, 65536, compress=True)
+                        await tcp.send(conn.data_to_send())
                         conn.receive_data(await tcp.recv())
-                    elif isinstance(event, hsmb.FileOpened):
-                        break
+                        event = conn.next_event()
 
-                file_open = event.open
-                try:
-                    conn.read(file_open, 0, 65536, compress=True)
-                    await tcp.send(conn.data_to_send())
-                    conn.receive_data(await tcp.recv())
-                    event = conn.next_event()
-
-                finally:
-                    conn.close(file_open.file_id, session_id, query_attrib=True)
-                    await tcp.send(conn.data_to_send())
-                    conn.receive_data(await tcp.recv())
-                    event = conn.next_event()
-
-                conn.create(
-                    tree_id,
-                    session_id,
-                    "large.txt",
-                    hsmb.CreateDisposition.SUPERSEDE,
-                    desired_access=0x02000000,
-                    share_access=hsmb.ShareAccess.WRITE | hsmb.ShareAccess.READ,
-                )
-                await tcp.send(conn.data_to_send())
-                while True:
-                    event = conn.next_event()
-                    if not event:
+                    finally:
+                        conn.close(file_open.file_id, session_id, query_attrib=True)
+                        await tcp.send(conn.data_to_send())
                         conn.receive_data(await tcp.recv())
-                    elif isinstance(event, hsmb.FileOpened):
-                        break
+                        event = conn.next_event()
 
-                file_open = event.open
-                try:
-                    conn.write(file_open, 0, b"a" * 65536, compress_write=True)
+                    conn.create(
+                        tree_id,
+                        session_id,
+                        "large.txt",
+                        hsmb.messages.CreateDisposition.SUPERSEDE,
+                        desired_access=0x02000000,
+                        share_access=hsmb.messages.ShareAccess.WRITE | hsmb.messages.ShareAccess.READ,
+                    )
                     await tcp.send(conn.data_to_send())
-                    conn.receive_data(await tcp.recv())
-                    event = conn.next_event()
+                    while True:
+                        event = conn.next_event()
+                        if not event:
+                            conn.receive_data(await tcp.recv())
+                        elif isinstance(event, hsmb.FileOpened):
+                            break
 
-                finally:
-                    conn.close(file_open.file_id, session_id, query_attrib=True)
-                    await tcp.send(conn.data_to_send())
-                    conn.receive_data(await tcp.recv())
-                    event = conn.next_event()
+                    file_open = event.open
+                    try:
+                        conn.write(file_open, 0, b"a" * 65536, compress_write=True)
+                        await tcp.send(conn.data_to_send())
+                        conn.receive_data(await tcp.recv())
+                        event = conn.next_event()
 
-                return
+                    finally:
+                        conn.close(file_open.file_id, session_id, query_attrib=True)
+                        await tcp.send(conn.data_to_send())
+                        conn.receive_data(await tcp.recv())
+                        event = conn.next_event()
 
                 conn.create(
                     tree_id,
                     session_id,
                     "file.txt",
-                    hsmb.CreateDisposition.SUPERSEDE,
+                    hsmb.messages.CreateDisposition.SUPERSEDE,
                     desired_access=0x02000000,
                 )
                 await tcp.send(conn.data_to_send())
@@ -392,7 +404,7 @@ async def main() -> None:
                         tree_id,
                         session_id,
                         "file.txt",
-                        hsmb.CreateDisposition.SUPERSEDE,
+                        hsmb.messages.CreateDisposition.SUPERSEDE,
                         desired_access=0x02000000,
                         transaction=transaction,
                     )

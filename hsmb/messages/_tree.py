@@ -8,10 +8,10 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
+from hsmb.messages._messages import Command, SMBMessage
 
 
-class ContextType(enum.IntEnum):
+class TreeContextType(enum.IntEnum):
     RESERVED = 0x0000
     REMOTED_IDENTITY = 0x0001
 
@@ -62,7 +62,7 @@ class TreeConnectFlags(enum.IntFlag):
 class TreeContext:
     __slots__ = ("context_type",)
 
-    context_type: ContextType
+    context_type: TreeContextType
 
     def pack(self) -> bytearray:
         raise NotImplementedError()
@@ -89,7 +89,7 @@ class RemotedIdentity(TreeContext):
         ticket_type: int,
         username: str,
     ) -> None:
-        super().__init__(ContextType.REMOTED_IDENTITY)
+        super().__init__(TreeContextType.REMOTED_IDENTITY)
         object.__setattr__(self, "username", username)
         object.__setattr__(self, "ticket_type", ticket_type)
 
@@ -167,11 +167,11 @@ class TreeConnectRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["TreeConnectRequest", int]:
+    ) -> "TreeConnectRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 8:
-            raise MalformedPacket("Tree connect request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         flags = TreeConnectFlags(struct.unpack("<H", view[2:4])[0])
         path_offset = struct.unpack("<H", view[4:6])[0] - offset_from_header
@@ -182,7 +182,7 @@ class TreeConnectRequest(SMBMessage):
         contexts: typing.List[TreeContext] = []
         if flags & TreeConnectFlags.EXTENSION_PRESENT:
             if len(view) < 14:
-                raise MalformedPacket("Tree connect request payload is too small")
+                raise MalformedPacket(f"{cls.__name__} buffer is too small")
 
             context_offset = struct.unpack("<I", view[8:12])[0]
             context_count = struct.unpack("<H", view[12:14])[0]
@@ -200,13 +200,10 @@ class TreeConnectRequest(SMBMessage):
 
                     end_idx += offset
 
-        return (
-            TreeConnectRequest(
-                flags=flags,
-                path=path_name,
-                tree_contexts=contexts,
-            ),
-            end_idx,
+        return TreeConnectRequest(
+            flags=flags,
+            path=path_name,
+            tree_contexts=contexts,
         )
 
 
@@ -254,25 +251,22 @@ class TreeConnectResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["TreeConnectResponse", int]:
+    ) -> "TreeConnectResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
-            raise MalformedPacket("Tree connect response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         share_type = ShareType(struct.unpack("<B", view[2:3])[0])
         share_flags = ShareFlags(struct.unpack("<I", view[4:8])[0])
         capabilities = ShareCapabilities(struct.unpack("<I", view[8:12])[0])
         maximal_access = struct.unpack("<I", view[12:16])[0]
 
-        return (
-            TreeConnectResponse(
-                share_type=share_type,
-                share_flags=share_flags,
-                capabilities=capabilities,
-                maximal_access=maximal_access,
-            ),
-            16,
+        return TreeConnectResponse(
+            share_type=share_type,
+            share_flags=share_flags,
+            capabilities=capabilities,
+            maximal_access=maximal_access,
         )
 
 
@@ -297,12 +291,12 @@ class TreeDisconnectRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["TreeDisconnectRequest", int]:
+    ) -> "TreeDisconnectRequest":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Tree disconnect request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return TreeDisconnectRequest(), 4
+        return TreeDisconnectRequest()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -326,12 +320,12 @@ class TreeDisconnectResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["TreeDisconnectResponse", int]:
+    ) -> "TreeDisconnectResponse":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Tree disconnect response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return TreeDisconnectResponse(), 4
+        return TreeDisconnectResponse()
 
 
 def pack_tree_context(
@@ -388,7 +382,7 @@ def unpack_tree_context(
     if len(view) < 8:
         raise MalformedPacket("Tree context payload is too small")
 
-    context_type = ContextType(struct.unpack("<H", view[0:2])[0])
+    context_type = TreeContextType(struct.unpack("<H", view[0:2])[0])
     context_length = struct.unpack("<H", view[2:4])[0]
     context_data = view[8 : 8 + context_length]
 
@@ -396,7 +390,7 @@ def unpack_tree_context(
         raise MalformedPacket("Tree context payload is too small")
 
     context_cls: typing.Optional[typing.Type[TreeContext]] = {
-        ContextType.REMOTED_IDENTITY: RemotedIdentity,
+        TreeContextType.REMOTED_IDENTITY: RemotedIdentity,
     }.get(context_type, None)
     if not context_cls:
         raise MalformedPacket(f"Unknown tree context type {context_type}")

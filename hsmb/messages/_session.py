@@ -8,8 +8,8 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
-from hsmb._negotiate import Capabilities, SecurityModes
+from hsmb.messages._messages import Command, SMBMessage
+from hsmb.messages._negotiate import Capabilities, SecurityModes
 
 
 class SessionFlags(enum.IntFlag):
@@ -76,11 +76,11 @@ class SessionSetupRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["SessionSetupRequest", int]:
+    ) -> "SessionSetupRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
-            raise MalformedPacket("Session setup request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         flags = SessionSetupFlags(struct.unpack("<B", view[2:3])[0])
         security_mode = SecurityModes(struct.unpack("<B", view[3:4])[0])
@@ -91,19 +91,16 @@ class SessionSetupRequest(SMBMessage):
         previous_session_id = struct.unpack("<Q", view[16:24])[0]
 
         if len(view) < (sec_offset + sec_length):
-            raise MalformedPacket("Session setup request sec buffer is out of bounds")
+            raise MalformedPacket(f"{cls.__name__} security buffer is out of bounds")
         buffer = bytes(view[sec_offset : sec_offset + sec_length])
 
-        return (
-            SessionSetupRequest(
-                flags=flags,
-                security_mode=security_mode,
-                capabilities=capabilities,
-                channel=channel,
-                previous_session_id=previous_session_id,
-                security_buffer=buffer,
-            ),
-            sec_offset + sec_length,
+        return SessionSetupRequest(
+            flags=flags,
+            security_mode=security_mode,
+            capabilities=capabilities,
+            channel=channel,
+            previous_session_id=previous_session_id,
+            security_buffer=buffer,
         )
 
 
@@ -144,21 +141,21 @@ class SessionSetupResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["SessionSetupResponse", int]:
+    ) -> "SessionSetupResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 8:
-            raise MalformedPacket("Session setup response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         session_flags = SessionFlags(struct.unpack("<H", view[2:4])[0])
         sec_offset = struct.unpack("<H", view[4:6])[0] - offset_from_header
         sec_length = struct.unpack("<H", view[6:8])[0]
 
         if len(view) < (sec_offset + sec_length):
-            raise MalformedPacket("Session setup response sec buffer is out of bounds")
+            raise MalformedPacket(f"{cls.__name__} security buffer is out of bounds")
         buffer = bytes(view[sec_offset : sec_offset + sec_length])
 
-        return SessionSetupResponse(session_flags=session_flags, security_buffer=buffer), sec_offset + sec_length
+        return SessionSetupResponse(session_flags=session_flags, security_buffer=buffer)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,12 +179,12 @@ class LogoffRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["LogoffRequest", int]:
+    ) -> "LogoffRequest":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Logoff request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return LogoffRequest(), 4
+        return LogoffRequest()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -211,9 +208,9 @@ class LogoffResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["LogoffResponse", int]:
+    ) -> "LogoffResponse":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Logoff response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return LogoffResponse(), 4
+        return LogoffResponse()

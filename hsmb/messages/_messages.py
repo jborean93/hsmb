@@ -54,7 +54,7 @@ class SMBMessage:
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["SMBMessage", int]:
+    ) -> "SMBMessage":
         raise NotImplementedError()
 
 
@@ -79,12 +79,12 @@ class EchoRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["EchoRequest", int]:
+    ) -> "EchoRequest":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Echo request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return EchoRequest(), 4
+        return EchoRequest()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,9 +108,9 @@ class EchoResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["EchoResponse", int]:
+    ) -> "EchoResponse":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Echo response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return EchoResponse(), 4
+        return EchoResponse()

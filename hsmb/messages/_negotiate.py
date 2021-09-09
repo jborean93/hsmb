@@ -2,7 +2,6 @@
 # Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
-import abc
 import dataclasses
 import enum
 import struct
@@ -10,13 +9,10 @@ import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
-
-if typing.TYPE_CHECKING:
-    from hsmb._header import CompressionTransform, SMB2Header, TransformHeader
+from hsmb.messages._messages import Command, SMBMessage
 
 
-class ContextType(enum.IntEnum):
+class NegotiateContextType(enum.IntEnum):
     PREAUTH_INTEGRITY_CAPABILITIES = 0x0001
     ENCRYPTION_CAPABILITIES = 0x0002
     COMPRESSION_CAPABILITIES = 0x0003
@@ -98,7 +94,7 @@ class SigningAlgorithm(enum.IntEnum):
 class NegotiateContext:
     __slots__ = ("context_type",)
 
-    context_type: ContextType
+    context_type: NegotiateContextType
 
     def pack(self) -> bytearray:
         raise NotImplementedError()
@@ -125,7 +121,7 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         hash_algorithms: typing.List[HashAlgorithm],
         salt: bytes,
     ) -> None:
-        super().__init__(ContextType.PREAUTH_INTEGRITY_CAPABILITIES)
+        super().__init__(NegotiateContextType.PREAUTH_INTEGRITY_CAPABILITIES)
         object.__setattr__(self, "hash_algorithms", hash_algorithms)
         object.__setattr__(self, "salt", salt)
 
@@ -176,7 +172,7 @@ class EncryptionCapabilities(NegotiateContext):
         *,
         ciphers: typing.List[Cipher],
     ) -> None:
-        super().__init__(ContextType.ENCRYPTION_CAPABILITIES)
+        super().__init__(NegotiateContextType.ENCRYPTION_CAPABILITIES)
         object.__setattr__(self, "ciphers", ciphers)
 
     def pack(self) -> bytearray:
@@ -219,7 +215,7 @@ class CompressionCapabilities(NegotiateContext):
         flags: CompressionCapabilityFlags,
         compression_algorithms: typing.List[CompressionAlgorithm],
     ) -> None:
-        super().__init__(ContextType.COMPRESSION_CAPABILITIES)
+        super().__init__(NegotiateContextType.COMPRESSION_CAPABILITIES)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "compression_algorithms", compression_algorithms)
 
@@ -264,7 +260,7 @@ class NetnameNegotiate(NegotiateContext):
         *,
         net_name: str,
     ) -> None:
-        super().__init__(ContextType.NETNAME_NEGOTIATE_CONTEXT_ID)
+        super().__init__(NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID)
         object.__setattr__(self, "net_name", net_name)
 
     def pack(self) -> bytearray:
@@ -292,7 +288,7 @@ class TransportCapabilities(NegotiateContext):
         *,
         flags: TransportCapabilityFlags,
     ) -> None:
-        super().__init__(ContextType.TRANSPORT_CAPABILITIES)
+        super().__init__(NegotiateContextType.TRANSPORT_CAPABILITIES)
         object.__setattr__(self, "flags", flags)
 
     def pack(self) -> bytearray:
@@ -321,7 +317,7 @@ class RdmaTransformCapabilities(NegotiateContext):
         *,
         rdma_transform_ids: typing.List[RdmaTransformId],
     ) -> None:
-        super().__init__(ContextType.RDMA_TRANSFORM_CAPABILITIES)
+        super().__init__(NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES)
         object.__setattr__(self, "rdma_transform_ids", rdma_transform_ids)
 
     def pack(self) -> bytearray:
@@ -364,7 +360,7 @@ class SigningCapabilities(NegotiateContext):
         *,
         signing_algorithms: typing.List[SigningAlgorithm],
     ) -> None:
-        super().__init__(ContextType.SIGNING_CAPABILITIES)
+        super().__init__(NegotiateContextType.SIGNING_CAPABILITIES)
         object.__setattr__(self, "signing_algorithms", signing_algorithms)
 
     def pack(self) -> bytearray:
@@ -392,89 +388,6 @@ class SigningCapabilities(NegotiateContext):
             algos.append(SigningAlgorithm(val))
 
         return SigningCapabilities(signing_algorithms=algos)
-
-
-class HashAlgorithmBase(metaclass=abc.ABCMeta):
-    @classmethod
-    @abc.abstractmethod
-    def algorithm_id(cls) -> HashAlgorithm:
-        ...
-
-    @abc.abstractmethod
-    def hash(
-        self,
-        data: bytes,
-    ) -> bytes:
-        ...
-
-
-class CipherBase(metaclass=abc.ABCMeta):
-    @classmethod
-    @abc.abstractmethod
-    def cipher_id(self) -> Cipher:
-        ...
-
-    @abc.abstractmethod
-    def encrypt(
-        self,
-        header: "SMB2Header",
-        message: memoryview,
-        key: bytes,
-    ) -> bytearray:
-        ...
-
-    @abc.abstractmethod
-    def decrypt(
-        self,
-        header: "TransformHeader",
-        message: memoryview,
-        key: bytes,
-    ) -> bytearray:
-        ...
-
-
-class CompressionAlgorithmBase(metaclass=abc.ABCMeta):
-    @classmethod
-    @abc.abstractmethod
-    def compression_ids(cls) -> typing.List[CompressionAlgorithm]:
-        ...
-
-    @classmethod
-    def can_chain(cls) -> bool:
-        ...
-
-    @abc.abstractmethod
-    def compress(
-        self,
-        algorithms: typing.List[CompressionAlgorithm],
-        data: bytearray,
-        hints: typing.List[slice],
-        supports_chaining: bool,
-    ) -> bytearray:
-        ...
-
-    @abc.abstractmethod
-    def decompress(
-        self,
-        header: "CompressionTransform",
-    ) -> bytearray:
-        ...
-
-
-class SigningAlgorithmBase(metaclass=abc.ABCMeta):
-    @classmethod
-    @abc.abstractmethod
-    def signing_id(cls) -> SigningAlgorithm:
-        ...
-
-    @abc.abstractmethod
-    def sign(
-        self,
-        key: bytes,
-        header: "SMB2Header",
-        message: bytes,
-    ) -> bytes:
-        ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -511,11 +424,11 @@ class SMB1NegotiateRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["SMB1NegotiateRequest", int]:
+    ) -> "SMB1NegotiateRequest":
         # FIXME
         dialects: typing.List[str] = []
 
-        return SMB1NegotiateRequest(dialects=dialects), 0
+        return SMB1NegotiateRequest(dialects=dialects)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -550,11 +463,14 @@ class SMB1NegotiateResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["SMB1NegotiateResponse", int]:
+    ) -> "SMB1NegotiateResponse":
         view = memoryview(data)[offset:]
 
+        if len(view) < 3:
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
+
         selected_index = struct.unpack("<h", view[1:3])[0]
-        return SMB1NegotiateResponse(selected_index=selected_index), 0
+        return SMB1NegotiateResponse(selected_index=selected_index)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -629,11 +545,11 @@ class NegotiateRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["NegotiateRequest", int]:
+    ) -> "NegotiateRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 36:
-            raise MalformedPacket("Negotiate request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         dialect_count = struct.unpack("<H", view[2:4])[0]
         security_mode = SecurityModes(struct.unpack("<H", view[4:6])[0])
@@ -644,7 +560,7 @@ class NegotiateRequest(SMBMessage):
 
         end_idx = 36
         if len(view) < (36 + (dialect_count * 2)):
-            raise MalformedPacket("Negotiate request payload dialect buffer is out of bounds")
+            raise MalformedPacket(f"{cls.__name__} dialect buffer is out of bounds")
 
         dialects: typing.List[Dialect] = []
         for _ in range(dialect_count):
@@ -665,15 +581,12 @@ class NegotiateRequest(SMBMessage):
 
                 end_idx += offset
 
-        return (
-            NegotiateRequest(
-                dialects=dialects,
-                security_mode=security_mode,
-                capabilities=capabilities,
-                client_guid=client_guid,
-                negotiate_contexts=contexts,
-            ),
-            end_idx,
+        return NegotiateRequest(
+            dialects=dialects,
+            security_mode=security_mode,
+            capabilities=capabilities,
+            client_guid=client_guid,
+            negotiate_contexts=contexts,
         )
 
 
@@ -785,11 +698,11 @@ class NegotiateResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["NegotiateResponse", int]:
+    ) -> "NegotiateResponse":
         view = memoryview(data)[offset:]
 
         if len(view) < 64:
-            raise MalformedPacket("Negotiate response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         security_mode = SecurityModes(struct.unpack("<H", view[2:4])[0])
         dialect_revision = Dialect(struct.unpack("<H", view[4:6])[0])
@@ -810,7 +723,8 @@ class NegotiateResponse(SMBMessage):
         if sec_buffer_length:
             end_idx = sec_buffer_offset + sec_buffer_length
             if len(view) < end_idx:
-                raise MalformedPacket("Negotiate response payload security buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} security buffer is out of bounds")
+
             sec_buffer = bytes(view[sec_buffer_offset:end_idx])
 
         contexts: typing.List[NegotiateContext] = []
@@ -827,21 +741,18 @@ class NegotiateResponse(SMBMessage):
 
                 end_idx += offset
 
-        return (
-            NegotiateResponse(
-                security_mode=security_mode,
-                dialect_revision=dialect_revision,
-                server_guid=server_guid,
-                capabilities=capabilities,
-                max_transact_size=max_transact_size,
-                max_read_size=max_read_size,
-                max_write_size=max_write_size,
-                system_time=system_time,
-                server_start_time=server_start_time,
-                security_buffer=sec_buffer,
-                negotiate_contexts=contexts,
-            ),
-            end_idx,
+        return NegotiateResponse(
+            security_mode=security_mode,
+            dialect_revision=dialect_revision,
+            server_guid=server_guid,
+            capabilities=capabilities,
+            max_transact_size=max_transact_size,
+            max_read_size=max_read_size,
+            max_write_size=max_write_size,
+            system_time=system_time,
+            server_start_time=server_start_time,
+            security_buffer=sec_buffer,
+            negotiate_contexts=contexts,
         )
 
 
@@ -902,7 +813,7 @@ def unpack_negotiate_context(
     if len(view) < 8:
         raise MalformedPacket("Negotiate context payload is too small")
 
-    context_type = ContextType(struct.unpack("<H", view[0:2])[0])
+    context_type = NegotiateContextType(struct.unpack("<H", view[0:2])[0])
     context_length = struct.unpack("<H", view[2:4])[0]
 
     if len(view) < (8 + context_length):
@@ -911,13 +822,13 @@ def unpack_negotiate_context(
     context_data = view[8 : 8 + context_length]
 
     context_cls: typing.Optional[typing.Type[NegotiateContext]] = {
-        ContextType.PREAUTH_INTEGRITY_CAPABILITIES: PreauthIntegrityCapabilities,
-        ContextType.ENCRYPTION_CAPABILITIES: EncryptionCapabilities,
-        ContextType.COMPRESSION_CAPABILITIES: CompressionCapabilities,
-        ContextType.NETNAME_NEGOTIATE_CONTEXT_ID: NetnameNegotiate,
-        ContextType.TRANSPORT_CAPABILITIES: TransportCapabilities,
-        ContextType.RDMA_TRANSFORM_CAPABILITIES: RdmaTransformCapabilities,
-        ContextType.SIGNING_CAPABILITIES: SigningCapabilities,
+        NegotiateContextType.PREAUTH_INTEGRITY_CAPABILITIES: PreauthIntegrityCapabilities,
+        NegotiateContextType.ENCRYPTION_CAPABILITIES: EncryptionCapabilities,
+        NegotiateContextType.COMPRESSION_CAPABILITIES: CompressionCapabilities,
+        NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID: NetnameNegotiate,
+        NegotiateContextType.TRANSPORT_CAPABILITIES: TransportCapabilities,
+        NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES: RdmaTransformCapabilities,
+        NegotiateContextType.SIGNING_CAPABILITIES: SigningCapabilities,
     }.get(context_type, None)
     if not context_cls:
         raise MalformedPacket(f"Unknown negotiate context type {context_type}")

@@ -8,7 +8,7 @@ import struct
 import typing
 
 from hsmb._exceptions import MalformedPacket
-from hsmb._messages import Command, SMBMessage
+from hsmb.messages._messages import Command, SMBMessage
 
 
 class ReadChannel(enum.IntEnum):
@@ -74,13 +74,13 @@ class FlushRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["FlushRequest", int]:
+    ) -> "FlushRequest":
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
-            raise MalformedPacket("Flush request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return cls(file_id=bytes(view[8:24])), 24
+        return FlushRequest(file_id=bytes(view[8:24]))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -104,12 +104,12 @@ class FlushResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["FlushResponse", int]:
+    ) -> "FlushResponse":
         view = memoryview(data)[offset:]
         if len(view) < 4:
-            raise MalformedPacket("Flush response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
-        return cls(), 4
+        return FlushResponse()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -196,10 +196,10 @@ class ReadRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["ReadRequest", int]:
+    ) -> "ReadRequest":
         view = memoryview(data)[offset:]
         if len(view) < 49:
-            raise MalformedPacket("Read request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         padding = struct.unpack("<B", view[2:3])[0]
         flags = ReadRequestFlags(struct.unpack("<B", view[3:4])[0])
@@ -217,25 +217,20 @@ class ReadRequest(SMBMessage):
         if read_channel_length:
             end_idx = read_channel_offset + read_channel_length
             if len(view) < end_idx:
-                raise MalformedPacket("Read request read channel info buffer out of bound")
+                raise MalformedPacket(f"{cls.__name__} read channel info buffer is out of bounds")
 
             read_channel = bytes(view[read_channel_offset:end_idx])
-        else:
-            end_idx += 1
 
-        return (
-            cls(
-                flags=flags,
-                length=length,
-                offset=offset,
-                file_id=file_id,
-                minimum_count=minimum_count,
-                channel=channel,
-                remaining_bytes=remaining_bytes,
-                read_channel_info=read_channel,
-                padding=padding,
-            ),
-            end_idx,
+        return ReadRequest(
+            flags=flags,
+            length=length,
+            offset=offset,
+            file_id=file_id,
+            minimum_count=minimum_count,
+            channel=channel,
+            remaining_bytes=remaining_bytes,
+            read_channel_info=read_channel,
+            padding=padding,
         )
 
 
@@ -283,10 +278,10 @@ class ReadResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["ReadResponse", int]:
+    ) -> "ReadResponse":
         view = memoryview(data)[offset:]
         if len(view) < 17:
-            raise MalformedPacket("Read response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         data_offset = struct.unpack("<B", view[2:3])[0] - offset_from_header
         data_length = struct.unpack("<I", view[4:8])[0]
@@ -297,20 +292,14 @@ class ReadResponse(SMBMessage):
         if data_length:
             end_idx = data_offset + data_length
             if len(view) < end_idx:
-                raise MalformedPacket("Read response data buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} data buffer is out of bounds")
 
             data = bytes(view[data_offset:end_idx])
 
-        else:
-            end_idx = 17
-
-        return (
-            cls(
-                data_remaining=data_remaining,
-                flags=flags,
-                data=data,
-            ),
-            end_idx,
+        return ReadResponse(
+            data_remaining=data_remaining,
+            flags=flags,
+            data=data,
         )
 
 
@@ -396,10 +385,10 @@ class WriteRequest(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["WriteRequest", int]:
+    ) -> "WriteRequest":
         view = memoryview(data)[offset:]
         if len(view) < 49:
-            raise MalformedPacket("Write request payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         data_offset = struct.unpack("<H", view[2:4])[0] - offset_from_header
         length = struct.unpack("<I", view[4:8])[0]
@@ -417,7 +406,7 @@ class WriteRequest(SMBMessage):
         if length:
             data_end = data_offset + length
             if len(view) < data_end:
-                raise MalformedPacket("Write request data buffer is out of bounds")
+                raise MalformedPacket(f"{cls.__name__} data buffer is out of bounds")
 
             data = bytes(view[data_offset:data_end])
 
@@ -425,21 +414,18 @@ class WriteRequest(SMBMessage):
         if write_channel_length:
             write_channel_end = write_channel_offset + write_channel_length
             if len(view) < write_channel_end:
-                raise MalformedPacket("Write request write channel buffer if out of bounds")
+                raise MalformedPacket(f"{cls.__name__} write channel buffer is out of bounds")
 
             write_channel = bytes(view[write_channel_offset:write_channel_end])
 
-        return (
-            cls(
-                offset=offset,
-                file_id=file_id,
-                channel=channel,
-                remaining_bytes=remaining_bytes,
-                flags=flags,
-                data=data,
-                write_channel_info=write_channel,
-            ),
-            48 + max(data_end, write_channel_end, 1),
+        return WriteRequest(
+            offset=offset,
+            file_id=file_id,
+            channel=channel,
+            remaining_bytes=remaining_bytes,
+            flags=flags,
+            data=data,
+            write_channel_info=write_channel,
         )
 
 
@@ -481,18 +467,15 @@ class WriteResponse(SMBMessage):
         data: typing.Union[bytes, bytearray, memoryview],
         offset_from_header: int,
         offset: int = 0,
-    ) -> typing.Tuple["WriteResponse", int]:
+    ) -> "WriteResponse":
         view = memoryview(data)[offset:]
         if len(view) < 16:
-            raise MalformedPacket("Write response payload is too small")
+            raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         count = struct.unpack("<I", view[4:8])[0]
         remaining = struct.unpack("<I", view[8:12])[0]
 
-        return (
-            cls(
-                count=count,
-                remaining=remaining,
-            ),
-            16,
+        return WriteResponse(
+            count=count,
+            remaining=remaining,
         )
