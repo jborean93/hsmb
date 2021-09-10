@@ -14,14 +14,16 @@ from hsmb.messages._negotiate import CompressionAlgorithm
 
 
 class HeaderFlags(enum.IntFlag):
-    NONE = 0x00000000
-    SERVER_TO_REDIR = 0x00000001
-    ASYNC_COMMAND = 0x00000002
-    RELATED_OPERATIONS = 0x00000004
-    SIGNED = 0x00000008
-    PRIORITY_MASK = 0x00000070
-    DFS_OPERATIONS = 0x10000000
-    REPLAY_OPERATION = 0x20000000
+    """SMB2 Packer Header Flags."""
+
+    NONE = 0x00000000  #: No flags are set
+    SERVER_TO_REDIR = 0x00000001  #: Message is a response from the server
+    ASYNC_COMMAND = 0x00000002  #: Indicates the async_id field is set
+    RELATED_OPERATIONS = 0x00000004  #: The request is part of a related compound request
+    SIGNED = 0x00000008  #: The header is signed
+    PRIORITY_MASK = 0x00000070  #: Mask used to set a priority between 0 and 7
+    DFS_OPERATIONS = 0x10000000  #: The command is a DFS operation
+    REPLAY_OPERATION = 0x20000000  #: The command is a replay operation
 
 
 class SMB1HeaderFlags(enum.IntFlag):
@@ -67,6 +69,7 @@ class SMBHeader:
     protocol_id: bytes
 
     def pack(self) -> bytearray:
+        """Packs the header into a bytearray."""
         raise NotImplementedError()
 
     @classmethod
