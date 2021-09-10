@@ -692,25 +692,6 @@ class SMBClient:
         view = memoryview(raw)
         header, offset = SMBHeader.unpack(view)
 
-        if isinstance(header, TransformHeader):
-            if not self.connection.cipher_id:
-                raise Exception("Received encrypted message but no cipher was available for decryption")
-
-            session = self.connection.session_table[header.session_id]
-            decrypted_data = self.connection.cipher_id.decrypt(header, raw, session.decryption_key)
-            self._receive_buffer[0] = decrypted_data
-            view = memoryview(self._receive_buffer[0])
-            header, offset = SMBHeader.unpack(view)
-
-        if isinstance(header, CompressionTransform):
-            if not self.connection.compressor:
-                raise Exception("Received compressed message but no compressor was available for decompression")
-
-            decompressed_data = self.connection.compressor.decompress(header)
-            self._receive_buffer[0] = decompressed_data
-            view = memoryview(self._receive_buffer[0])
-            header, offset = SMBHeader.unpack(view)
-
         if isinstance(header, SMB1Header):
             if header.command != Command.SMB1_NEGOTIATE:
                 raise Exception("Expecting SMB1 NEGOTIATE command")
@@ -730,6 +711,25 @@ class SMBClient:
                 signature=b"\x00" * 16,
             )
             self.connection.sequence_window.append((1, 0))
+
+        if isinstance(header, TransformHeader):
+            if not self.connection.cipher_id:
+                raise Exception("Received encrypted message but no cipher was available for decryption")
+
+            session = self.connection.session_table[header.session_id]
+            decrypted_data = self.connection.cipher_id.decrypt(header, raw, session.decryption_key)
+            self._receive_buffer[0] = decrypted_data
+            view = memoryview(self._receive_buffer[0])
+            header, offset = SMBHeader.unpack(view)
+
+        if isinstance(header, CompressionTransform):
+            if not self.connection.compressor:
+                raise Exception("Received compressed message but no compressor was available for decompression")
+
+            decompressed_data = self.connection.compressor.decompress(header)
+            self._receive_buffer[0] = decompressed_data
+            view = memoryview(self._receive_buffer[0])
+            header, offset = SMBHeader.unpack(view)
 
         if not isinstance(header, SMB2Header):
             raise Exception("Unknown header this shouldn't occur ever")

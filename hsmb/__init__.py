@@ -22,6 +22,7 @@ from hsmb._provider import (
     HashingProvider,
     SigningProvider,
 )
+from hsmb._server import ServerConfig, SMBServer
 
 ## isort: list
 __all__ = [
@@ -37,7 +38,9 @@ __all__ = [
     "MessageReceived",
     "Pending",
     "ProtocolNegotiated",
+    "ServerConfig",
     "SMBClient",
+    "SMBServer",
     "SessionAuthenticated",
     "SessionProcessingRequired",
     "SigningProvider",

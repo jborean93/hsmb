@@ -69,6 +69,7 @@ class NtStatus(enum.IntEnum):
     STATUS_DFS_UNAVAILABLE = 0xC000026D
     STATUS_NOT_A_REPARSE_POINT = 0xC0000275
     STATUS_SERVER_UNAVAILABLE = 0xC0000466
+    STATUS_SMB_NO_PREAUTH_INTEGRITY_HASH_OVERLAP = 0xC05D0000
 
 
 def unpack_error_response(
@@ -102,6 +103,10 @@ def unpack_error_response(
 
 class SMBError(Exception):
     """Base class for all exception in hsmb."""
+
+
+class ConnectionDisconnect(Exception):
+    """Connection has been marked as disconnected."""
 
 
 class MalformedPacket(SMBError):
@@ -473,3 +478,8 @@ class NotAReparsePoint(ProtocolError):
 class ServerUnavailable(ProtocolError):
     _BASE_MESSAGE = "The file server is temporarily unavailable."
     _STATUS_CODE = NtStatus.STATUS_SERVER_UNAVAILABLE
+
+
+class SmbNoPreauthIntegrityHashOverlap(ProtocolError):
+    _BASE_MESSAGE = "No overlap between the offered preauth integrity hash algorithms and what the server supports."
+    _STATUS_CODE = NtStatus.STATUS_SMB_NO_PREAUTH_INTEGRITY_HASH_OVERLAP

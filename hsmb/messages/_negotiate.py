@@ -69,6 +69,7 @@ class Dialect(enum.IntEnum):
 
 
 class TransportCapabilityFlags(enum.IntFlag):
+    NONE = 0x00000000
     ACCEPT_TRANSPORT_LEVEL_SECURITY = 0x00000001
 
 
