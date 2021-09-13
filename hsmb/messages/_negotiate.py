@@ -8,11 +8,12 @@ import struct
 import typing
 import uuid
 
+from hsmb._enum_extras import OptionalIntEnum
 from hsmb._exceptions import MalformedPacket
 from hsmb.messages._messages import Command, SMBMessage
 
 
-class NegotiateContextType(enum.IntEnum):
+class NegotiateContextType(OptionalIntEnum):
     PREAUTH_INTEGRITY_CAPABILITIES = 0x0001
     ENCRYPTION_CAPABILITIES = 0x0002
     COMPRESSION_CAPABILITIES = 0x0003
@@ -22,7 +23,7 @@ class NegotiateContextType(enum.IntEnum):
     SIGNING_CAPABILITIES = 0x0008
 
 
-class HashAlgorithm(enum.IntEnum):
+class HashAlgorithm(OptionalIntEnum):
     SHA512 = 0x0001
 
 
@@ -37,7 +38,7 @@ class Capabilities(enum.IntFlag):
     ENCRYPTION = 0x00000040
 
 
-class Cipher(enum.IntEnum):
+class Cipher(OptionalIntEnum):
     NONE = 0x0000
     AES128_CCM = 0x0001
     AES128_GCM = 0x0002
@@ -50,7 +51,7 @@ class CompressionCapabilityFlags(enum.IntFlag):
     CHAINED = 0x00000001
 
 
-class CompressionAlgorithm(enum.IntEnum):
+class CompressionAlgorithm(OptionalIntEnum):
     NONE = 0x0000
     LZNT1 = 0x0001
     LZ77 = 0x0002
@@ -58,7 +59,7 @@ class CompressionAlgorithm(enum.IntEnum):
     PATTERN_V1 = 0x0004
 
 
-class Dialect(enum.IntEnum):
+class Dialect(OptionalIntEnum):
     UNKNOWN = 0x0000
     SMB202 = 0x0202
     SMB210 = 0x0210
@@ -73,7 +74,7 @@ class TransportCapabilityFlags(enum.IntFlag):
     ACCEPT_TRANSPORT_LEVEL_SECURITY = 0x00000001
 
 
-class RdmaTransformId(enum.IntEnum):
+class RdmaTransformId(OptionalIntEnum):
     NONE = 0x0000
     ENCRYPTION = 0x0001
     SIGNING = 0x0002
@@ -85,28 +86,108 @@ class SecurityModes(enum.IntFlag):
     SIGNING_REQUIRED = 0x0002
 
 
-class SigningAlgorithm(enum.IntEnum):
+class SigningAlgorithm(OptionalIntEnum):
     HMAC_SHA256 = 0x0000
     AES_CMAC = 0x0001
     AES_GMAC = 0x0002
 
 
+def _unpack_negotiate_context(
+    name: str,
+    context_type: typing.Optional[NegotiateContextType],
+    view: memoryview,
+) -> typing.Tuple[NegotiateContextType, int, memoryview]:
+    """Unpacks the raw Negotiate Context structure."""
+    if len(view) < 4:
+        raise MalformedPacket(f"Not enough data to unpack {name!s}")
+
+    actual_context_type = NegotiateContextType(struct.unpack("<H", view[0:2])[0])
+    if context_type and actual_context_type != context_type:
+        raise MalformedPacket(f"Data is for {actual_context_type!s}, expecting {context_type!s}")
+
+    context_length = struct.unpack("<H", view[2:4])[0] + 8
+
+    if len(view) < context_length:
+        raise MalformedPacket(f"Not enough data to unpack {name!s}")
+
+    return actual_context_type, context_length, view[8:context_length]
+
+
 @dataclasses.dataclass(frozen=True)
 class NegotiateContext:
-    __slots__ = ("context_type",)
+    __slots__ = "context_type"
 
     context_type: NegotiateContextType
 
-    def pack(self) -> bytearray:
+    @property
+    def data(self) -> bytes:
         raise NotImplementedError()
+
+    def pack(self) -> bytearray:
+        context_data = self.data
+
+        return bytearray().join(
+            [
+                self.context_type.to_bytes(2, byteorder="little"),
+                len(context_data).to_bytes(2, byteorder="little"),
+                b"\x00\x00\x00\x00",  # Reserved
+                context_data,
+            ]
+        )
 
     @classmethod
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "NegotiateContext":
-        raise NotImplementedError()
+    ) -> typing.Tuple["NegotiateContext", int]:
+        view = memoryview(data)[offset:]
+
+        # Just check/get the first 2 bytes for the context type. The subsequent class unpack method checks the rest.
+        if len(view) < 2:
+            raise MalformedPacket("Negotiate context payload is too small")
+        context_type = NegotiateContextType(struct.unpack("<H", view[0:2])[0])
+
+        context_cls: typing.Type[NegotiateContext] = {
+            NegotiateContextType.PREAUTH_INTEGRITY_CAPABILITIES: PreauthIntegrityCapabilities,
+            NegotiateContextType.ENCRYPTION_CAPABILITIES: EncryptionCapabilities,
+            NegotiateContextType.COMPRESSION_CAPABILITIES: CompressionCapabilities,
+            NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID: NetnameNegotiate,
+            NegotiateContextType.TRANSPORT_CAPABILITIES: TransportCapabilities,
+            NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES: RdmaTransformCapabilities,
+            NegotiateContextType.SIGNING_CAPABILITIES: SigningCapabilities,
+        }.get(context_type, UnknownNegotiateContext)
+
+        return context_cls.unpack(view)
+
+
+@dataclasses.dataclass(frozen=True)
+class UnknownNegotiateContext(NegotiateContext):
+    __slots__ = ("_data",)
+
+    _data: bytes
+
+    def __init__(
+        self,
+        *,
+        context_type: NegotiateContextType,
+        data: bytes,
+    ) -> None:
+        super().__init__(context_type)
+        object.__setattr__(self, "_data", data)
+
+    @property
+    def data(self) -> bytes:
+        return self.data
+
+    @classmethod
+    def unpack(
+        cls,
+        data: typing.Union[bytes, bytearray, memoryview],
+        offset: int = 0,
+    ) -> typing.Tuple["UnknownNegotiateContext", int]:
+        context_type, length, view = _unpack_negotiate_context(cls.__name__, None, memoryview(data)[offset:])
+        return UnknownNegotiateContext(context_type=context_type, data=bytes(view)), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -126,8 +207,9 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         object.__setattr__(self, "hash_algorithms", hash_algorithms)
         object.__setattr__(self, "salt", salt)
 
-    def pack(self) -> bytearray:
-        return bytearray().join(
+    @property
+    def data(self) -> bytes:
+        return b"".join(
             [
                 len(self.hash_algorithms).to_bytes(2, byteorder="little"),
                 len(self.salt).to_bytes(2, byteorder="little"),
@@ -141,8 +223,12 @@ class PreauthIntegrityCapabilities(NegotiateContext):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "PreauthIntegrityCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["PreauthIntegrityCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.PREAUTH_INTEGRITY_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         algorithm_count = struct.unpack("<H", view[0:2])[0]
         algorithm_length = algorithm_count * 2
@@ -156,9 +242,12 @@ class PreauthIntegrityCapabilities(NegotiateContext):
 
         salt = bytes(view[4 + algorithm_length : 4 + algorithm_length + salt_length])
 
-        return PreauthIntegrityCapabilities(
-            hash_algorithms=algorithms,
-            salt=salt,
+        return (
+            PreauthIntegrityCapabilities(
+                hash_algorithms=algorithms,
+                salt=salt,
+            ),
+            length,
         )
 
 
@@ -176,8 +265,9 @@ class EncryptionCapabilities(NegotiateContext):
         super().__init__(NegotiateContextType.ENCRYPTION_CAPABILITIES)
         object.__setattr__(self, "ciphers", ciphers)
 
-    def pack(self) -> bytearray:
-        return bytearray().join(
+    @property
+    def data(self) -> bytes:
+        return b"".join(
             [
                 len(self.ciphers).to_bytes(2, byteorder="little"),
                 b"".join(c.to_bytes(2, byteorder="little") for c in self.ciphers),
@@ -189,8 +279,12 @@ class EncryptionCapabilities(NegotiateContext):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "EncryptionCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["EncryptionCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.ENCRYPTION_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         cipher_count = struct.unpack("<H", view[0:2])[0]
 
@@ -200,7 +294,7 @@ class EncryptionCapabilities(NegotiateContext):
             val = struct.unpack("<H", view[2 + offset : 4 + offset])[0]
             ciphers.append(Cipher(val))
 
-        return EncryptionCapabilities(ciphers=ciphers)
+        return EncryptionCapabilities(ciphers=ciphers), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -220,8 +314,9 @@ class CompressionCapabilities(NegotiateContext):
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "compression_algorithms", compression_algorithms)
 
-    def pack(self) -> bytearray:
-        return bytearray().join(
+    @property
+    def data(self) -> bytes:
+        return b"".join(
             [
                 len(self.compression_algorithms).to_bytes(2, byteorder="little"),
                 b"\x00\x00",  # Padding
@@ -235,8 +330,12 @@ class CompressionCapabilities(NegotiateContext):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "CompressionCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["CompressionCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.COMPRESSION_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         algo_count = struct.unpack("<H", view[0:2])[0]
         flags = CompressionCapabilityFlags(struct.unpack("<I", view[4:8])[0])
@@ -247,7 +346,7 @@ class CompressionCapabilities(NegotiateContext):
             val = struct.unpack("<H", view[8 + offset : 10 + offset])[0]
             algos.append(CompressionAlgorithm(val))
 
-        return CompressionCapabilities(flags=flags, compression_algorithms=algos)
+        return CompressionCapabilities(flags=flags, compression_algorithms=algos), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -264,18 +363,23 @@ class NetnameNegotiate(NegotiateContext):
         super().__init__(NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID)
         object.__setattr__(self, "net_name", net_name)
 
-    def pack(self) -> bytearray:
-        return bytearray(self.net_name.encode("utf-16-le"))
+    @property
+    def data(self) -> bytes:
+        return self.net_name.encode("utf-16-le")
 
     @classmethod
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "NetnameNegotiate":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["NetnameNegotiate", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID,
+            memoryview(data)[offset:],
+        )
 
-        return NetnameNegotiate(net_name=bytes(view).decode("utf-16-le"))
+        return NetnameNegotiate(net_name=bytes(view).decode("utf-16-le")), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -292,19 +396,24 @@ class TransportCapabilities(NegotiateContext):
         super().__init__(NegotiateContextType.TRANSPORT_CAPABILITIES)
         object.__setattr__(self, "flags", flags)
 
-    def pack(self) -> bytearray:
-        return bytearray(self.flags.to_bytes(4, byteorder="little"))
+    @property
+    def data(self) -> bytes:
+        return self.flags.to_bytes(4, byteorder="little")
 
     @classmethod
     def unpack(
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "TransportCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["TransportCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.TRANSPORT_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         flags = TransportCapabilityFlags(struct.unpack("<I", view[0:4])[0])
-        return TransportCapabilities(flags=flags)
+        return TransportCapabilities(flags=flags), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -321,8 +430,9 @@ class RdmaTransformCapabilities(NegotiateContext):
         super().__init__(NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES)
         object.__setattr__(self, "rdma_transform_ids", rdma_transform_ids)
 
-    def pack(self) -> bytearray:
-        return bytearray().join(
+    @property
+    def data(self) -> bytes:
+        return b"".join(
             [
                 len(self.rdma_transform_ids).to_bytes(2, byteorder="little"),
                 b"\x00\x00",  # Reserved1
@@ -336,8 +446,12 @@ class RdmaTransformCapabilities(NegotiateContext):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "RdmaTransformCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["RdmaTransformCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         transform_count = struct.unpack("<H", view[0:2])[0]
 
@@ -347,7 +461,7 @@ class RdmaTransformCapabilities(NegotiateContext):
             val = struct.unpack("<H", view[8 + offset : 10 + offset])[0]
             ids.append(RdmaTransformId(val))
 
-        return RdmaTransformCapabilities(rdma_transform_ids=ids)
+        return RdmaTransformCapabilities(rdma_transform_ids=ids), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -364,8 +478,9 @@ class SigningCapabilities(NegotiateContext):
         super().__init__(NegotiateContextType.SIGNING_CAPABILITIES)
         object.__setattr__(self, "signing_algorithms", signing_algorithms)
 
-    def pack(self) -> bytearray:
-        return bytearray().join(
+    @property
+    def data(self) -> bytes:
+        return b"".join(
             [
                 len(self.signing_algorithms).to_bytes(2, byteorder="little"),
                 b"".join(a.to_bytes(2, byteorder="little") for a in self.signing_algorithms),
@@ -377,8 +492,12 @@ class SigningCapabilities(NegotiateContext):
         cls,
         data: typing.Union[bytes, bytearray, memoryview],
         offset: int = 0,
-    ) -> "SigningCapabilities":
-        view = memoryview(data)[offset:]
+    ) -> typing.Tuple["SigningCapabilities", int]:
+        _, length, view = _unpack_negotiate_context(
+            cls.__name__,
+            NegotiateContextType.SIGNING_CAPABILITIES,
+            memoryview(data)[offset:],
+        )
 
         algo_count = struct.unpack("<H", view[0:2])[0]
 
@@ -388,7 +507,7 @@ class SigningCapabilities(NegotiateContext):
             val = struct.unpack("<H", view[2 + offset : 4 + offset])[0]
             algos.append(SigningAlgorithm(val))
 
-        return SigningCapabilities(signing_algorithms=algos)
+        return SigningCapabilities(signing_algorithms=algos), length
 
 
 @dataclasses.dataclass(frozen=True)
@@ -516,7 +635,7 @@ class NegotiateRequest(SMBMessage):
 
             last_idx = len(self.negotiate_contexts) - 1
             for idx, context in enumerate(self.negotiate_contexts):
-                context_data = pack_negotiate_context(context)
+                context_data = context.pack()
                 negotiate_contexts += context_data
 
                 context_padding_size = 8 - (len(context_data) % 8 or 8)
@@ -573,7 +692,7 @@ class NegotiateRequest(SMBMessage):
             end_idx = context_offset
 
             for idx in range(context_count):
-                ctx, offset = unpack_negotiate_context(view[end_idx:])
+                ctx, offset = NegotiateContext.unpack(view, offset=end_idx)
                 contexts.append(ctx)
 
                 if idx != context_count - 1:
@@ -652,7 +771,7 @@ class NegotiateResponse(SMBMessage):
         offset_from_header: int,
     ) -> bytearray:
         sec_buffer = self.security_buffer or b""
-        sec_buffer_offset = offset_from_header + 65
+        sec_buffer_offset = offset_from_header + 64
         negotiate_offset = 0
         padding_size = 0
         negotiate_contexts = bytearray()
@@ -664,7 +783,7 @@ class NegotiateResponse(SMBMessage):
 
             last_idx = len(self.negotiate_contexts) - 1
             for idx, context in enumerate(self.negotiate_contexts):
-                context_data = pack_negotiate_context(context)
+                context_data = context.pack()
                 negotiate_contexts += context_data
 
                 context_padding_size = 8 - (len(context_data) % 8 or 8)
@@ -733,7 +852,7 @@ class NegotiateResponse(SMBMessage):
             end_idx = context_offset
 
             for idx in range(context_count):
-                ctx, offset = unpack_negotiate_context(view[end_idx:])
+                ctx, offset = NegotiateContext.unpack(view, offset=end_idx)
                 contexts.append(ctx)
 
                 if idx != context_count - 1:
@@ -755,83 +874,3 @@ class NegotiateResponse(SMBMessage):
             security_buffer=sec_buffer,
             negotiate_contexts=contexts,
         )
-
-
-def pack_negotiate_context(
-    context: NegotiateContext,
-) -> bytearray:
-    """Pack the Negotiate Context object.
-
-    Packs the Negotiate Context object into bytes. The value is packed
-    according to the structure defined at `SMB2 NEGOTIATE_CONTEXT Structure`_.
-
-    Args:
-        context: The context to pack.
-
-    Returns:
-        bytes: The packed context.
-
-    .. _SMB2 NEGOTIATE_CONTEXT Structure:
-        https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/15332256-522e-4a53-8cd7-0bd17678a2f7
-    """
-    context_data = context.pack()
-
-    return bytearray().join(
-        [
-            context.context_type.to_bytes(2, byteorder="little"),
-            len(context_data).to_bytes(2, byteorder="little"),
-            b"\x00\x00\x00\x00",  # Reserved
-            context_data,
-        ]
-    )
-
-
-def unpack_negotiate_context(
-    data: typing.Union[bytes, bytearray, memoryview],
-) -> typing.Tuple[NegotiateContext, int]:
-    """Unpack the Negotiate Context bytes.
-
-    Unpacks the Negotiate Context bytes value to the object it represents. The
-    value is unpacked according to the structure defined at
-    `SMB2 NEGOTIATE_CONTEXT Structure`_.
-
-    Args:
-        data: The data to unpack.
-
-    Returns:
-        Tuple[NegotiateContext, int]: The unpacked context and the length of
-        context (including padding to the 8 byte boundary) that was unpacked.
-
-    Raises:
-        MalformedPacket: The data is too small or the context type specified is
-        an unknown type.
-
-    .. _SMB2 NEGOTIATE_CONTEXT Structure:
-        https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/15332256-522e-4a53-8cd7-0bd17678a2f7
-    """
-    view = memoryview(data)
-
-    if len(view) < 8:
-        raise MalformedPacket("Negotiate context payload is too small")
-
-    context_type = NegotiateContextType(struct.unpack("<H", view[0:2])[0])
-    context_length = struct.unpack("<H", view[2:4])[0]
-
-    if len(view) < (8 + context_length):
-        raise MalformedPacket("Negotiate context payload is too small")
-
-    context_data = view[8 : 8 + context_length]
-
-    context_cls: typing.Optional[typing.Type[NegotiateContext]] = {
-        NegotiateContextType.PREAUTH_INTEGRITY_CAPABILITIES: PreauthIntegrityCapabilities,
-        NegotiateContextType.ENCRYPTION_CAPABILITIES: EncryptionCapabilities,
-        NegotiateContextType.COMPRESSION_CAPABILITIES: CompressionCapabilities,
-        NegotiateContextType.NETNAME_NEGOTIATE_CONTEXT_ID: NetnameNegotiate,
-        NegotiateContextType.TRANSPORT_CAPABILITIES: TransportCapabilities,
-        NegotiateContextType.RDMA_TRANSFORM_CAPABILITIES: RdmaTransformCapabilities,
-        NegotiateContextType.SIGNING_CAPABILITIES: SigningCapabilities,
-    }.get(context_type, None)
-    if not context_cls:
-        raise MalformedPacket(f"Unknown negotiate context type {context_type}")
-
-    return context_cls.unpack(context_data), 8 + context_length

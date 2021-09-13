@@ -237,13 +237,13 @@ class TcpConnection:
 
 
 async def main() -> None:
-    server = "127.0.0.1"
-    username = "smbuser"
-    password = "smbpass"
+    # server = "127.0.0.1"
+    # username = "smbuser"
+    # password = "smbpass"
 
-    # server = "server2022.domain.test"
-    # username = "vagrant-domain@DOMAIN.TEST"
-    # password = "VagrantPass1"
+    server = "server2022.domain.test"
+    username = "vagrant-domain@DOMAIN.TEST"
+    password = "VagrantPass1"
 
     # server = "192.168.80.10"
     # username = "vagrant"

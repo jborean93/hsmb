@@ -9,11 +9,12 @@ import typing
 import uuid
 
 from hsmb._config import SMBConfig, SMBRole, TransportIdentifier
-from hsmb._events import Event
+from hsmb._events import Event, MessageReceived
 from hsmb._exceptions import (
     ConnectionDisconnect,
     InvalidParameter,
     NotSupported,
+    NtStatus,
     SmbNoPreauthIntegrityHashOverlap,
 )
 from hsmb._provider import (
@@ -32,6 +33,7 @@ from hsmb.messages import (
     CompressionTransform,
     Dialect,
     EncryptionCapabilities,
+    HeaderFlags,
     NegotiateContext,
     NegotiateContextType,
     NegotiateRequest,
@@ -44,6 +46,7 @@ from hsmb.messages import (
     SMB1Header,
     SMB2Header,
     SMBHeader,
+    SMBMessage,
     TransformHeader,
     TransportCapabilities,
     TransportCapabilityFlags,
@@ -149,8 +152,63 @@ class SMBServer:
     ) -> None:
         self.config = config
         self.connection: ServerConnection = ServerConnection()
-        self._data_to_send: typing.List[memoryview] = []
+        self._data_to_send: typing.List[bytearray] = []
         self._receive_buffer: typing.List[bytearray] = []
+
+    def send(
+        self,
+        message: SMBMessage,
+        message_id: int,
+        status: NtStatus = NtStatus.STATUS_SUCCESS,
+        credit_response: int = 0,
+        priority: typing.Optional[int] = None,
+        session_id: int = 0,
+        tree_id: int = 0,
+        async_id: int = 0,
+    ) -> None:
+        if not self.connection:
+            raise Exception("Cannot send any message without a negotiated connection")
+
+        flags = HeaderFlags.SERVER_TO_REDIR
+        if async_id:
+            if tree_id:
+                raise Exception("Cannot set both async_id and tree_id")
+
+            flags |= HeaderFlags.ASYNC_COMMAND
+
+        if priority is not None:
+            if priority < 0 or priority > 7:
+                raise ValueError("Priority must be between 0 and 7")
+            flags |= priority << 4
+
+        header = SMB2Header(
+            credit_charge=0,
+            channel_sequence=0,
+            status=status,
+            command=message.command,
+            credits=credit_response,
+            flags=flags,
+            next_command=0,
+            message_id=message_id,
+            async_id=async_id,
+            tree_id=tree_id,
+            session_id=session_id,
+            signature=b"\x00" * 16,
+        )
+        if status != NtStatus.STATUS_PENDING:
+            del self.connection.request_list[message_id]
+
+        data = header.pack()
+        data += message.pack(len(data))
+        self._data_to_send.append(data)
+
+    def data_to_send(
+        self,
+    ) -> bytes:
+        if self._data_to_send:
+            return bytes(self._data_to_send.pop(0))
+        else:
+            return b""
 
     def receive_data(
         self,
@@ -165,7 +223,7 @@ class SMBServer:
         if not self._receive_buffer:
             return None
 
-        raw = self._receive_buffer[0]
+        raw = self._receive_buffer.pop(0)
         receive_length = len(raw)
         view = memoryview(raw)
         header, offset = SMBHeader.unpack(view)
@@ -217,16 +275,17 @@ class SMBServer:
                 raise ConnectionDisconnect("Received request that was too large")
 
         if header.command == Command.NEGOTIATE:
-            msg = NegotiateRequest.unpack(view, offset, offset)
-            return self._negotiate(header, msg)
+            return self._negotiate(header, view, offset)
 
         raise NotImplementedError()
 
     def _negotiate(
         self,
         header: SMB2Header,
-        message: NegotiateRequest,
+        raw: memoryview,
+        message_offset: int,
     ) -> Event:
+        message = NegotiateRequest.unpack(raw, message_offset, message_offset)
         if self.connection.negotiate_dialect not in [Dialect.UNKNOWN, Dialect.SMB2_WILDCARD]:
             raise ConnectionDisconnect("Received negotiate request but dialect has already been negotiated")
 
@@ -244,7 +303,7 @@ class SMBServer:
             Dialect.SMB302: "3.0.2",
             Dialect.SMB311: "3.1.1",
         }
-        for d in message.dialects:
+        for d in sorted(message.dialects, reverse=True):
             if d in dialect_map:
                 self.connection.dialect = dialect_map[d]
                 self.connection.negotiate_dialect = d
@@ -275,9 +334,9 @@ class SMBServer:
                 if not self.connection.preauth_integrity_hash_id:
                     raise SmbNoPreauthIntegrityHashOverlap()
 
-                # FIXME
-                self.connection.preauth_integrity_hash_value = b""
-
+                self.connection.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
+                    b"\x00" * 64 + bytes(raw)
+                )
                 response_contexts.append(
                     PreauthIntegrityCapabilities(
                         hash_algorithms=[self.connection.preauth_integrity_hash_id.algorithm_id],
@@ -355,17 +414,13 @@ class SMBServer:
                     raise InvalidParameter()
 
                 available_sign_algos = {s.signing_id: s for s in self.config.registered_signing_algorithms or []}
-                return_sign_algos: typing.List[SigningAlgorithm] = []
                 for s in context.signing_algorithms:
                     if s in available_sign_algos:
                         self.connection.signing_algorithm_id = available_sign_algos[s]
-                        return_sign_algos.append(s)
+                        response_contexts.append(SigningCapabilities(signing_algorithms=[s]))
                         break
 
-                else:
-                    return_sign_algos.append(0)  # FIXME - does this error
-
-                response_contexts.append(SigningCapabilities(signing_algorithms=return_sign_algos))
+                # If nothing was negotiated the context isn't returned and the SMB 3 default of AES CMAC is used.
 
             elif isinstance(context, TransportCapabilities):
                 if context.context_type in found_contexts:
@@ -432,9 +487,11 @@ class SMBServer:
             security_buffer=None,  # FIXME
             negotiate_contexts=response_contexts,
         )
+        self.send(response, header.message_id, credit_response=1)
 
-        if self.connection.negotiate_dialect >= Dialect.SMB311:
-            # FIXME: Generate preauth integrity hash value for response
-            a = ""
+        if self.connection.preauth_integrity_hash_id:
+            self.connection.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
+                self.connection.preauth_integrity_hash_value + bytes(self._data_to_send[0])
+            )
 
-        a = ""
+        return MessageReceived(header, message, data_available=True)
