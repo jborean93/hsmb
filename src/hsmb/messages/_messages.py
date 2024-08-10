@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import enum
-import typing
 
 from hsmb._exceptions import MalformedPacket
 
@@ -39,7 +39,7 @@ class SMBMessage:
     command: Command
 
     @property
-    def compress_hint(self) -> typing.Optional[slice]:
+    def compress_hint(self) -> slice | None:
         return None
 
     def pack(
@@ -51,10 +51,10 @@ class SMBMessage:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "SMBMessage":
+    ) -> SMBMessage:
         raise NotImplementedError()
 
 
@@ -76,10 +76,10 @@ class EchoRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "EchoRequest":
+    ) -> EchoRequest:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
@@ -105,10 +105,10 @@ class EchoResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "EchoResponse":
+    ) -> EchoResponse:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")

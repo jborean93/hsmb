@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import hashlib
 import hmac
 import os
-import typing
 
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import cmac, hashes
 from cryptography.hazmat.primitives.ciphers import aead, algorithms
 from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC, CounterLocation, Mode
@@ -26,7 +25,7 @@ from hsmb.messages import (
 
 
 def _encrypt_aes(
-    algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
+    algorithm: type[aead.AESCCM] | type[aead.AESGCM],
     header: SMB2Header,
     message: bytearray,
     key: bytes,
@@ -55,7 +54,7 @@ def _encrypt_aes(
 
 
 def _decrypt_aes(
-    algorithm: typing.Union[typing.Type[aead.AESCCM], typing.Type[aead.AESGCM]],
+    algorithm: type[aead.AESCCM] | type[aead.AESGCM],
     header: TransformHeader,
     message: bytearray,
     key: bytes,
@@ -198,10 +197,7 @@ class AESCMACSigningAlgorithm(SigningProvider):
         data: bytearray,
         key: bytes,
     ) -> bytes:
-        c = cmac.CMAC(
-            algorithms.AES(key),
-            backend=default_backend(),  # type: ignore[no-untyped-call]
-        )
+        c = cmac.CMAC(algorithms.AES(key))
         c.update(bytes(data))
         return c.finalize()
 
@@ -270,6 +266,5 @@ def smb3kdf(
         label=label,
         context=context,
         fixed=None,
-        backend=default_backend(),  # type: ignore[no-untyped-call]
     )
     return kdf.derive(ki)

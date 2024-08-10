@@ -1,11 +1,12 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import datetime
 import os
-import typing
+import typing as t
 import uuid
 
 from hsmb._config import SMBConfig, SMBRole, TransportIdentifier
@@ -70,20 +71,24 @@ class ServerConfig(SMBConfig):
 
     # server_statistics
     # server_enabled
-    share_list: typing.List = dataclasses.field(default_factory=list)
-    global_open_table: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
-    global_session_table: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
-    connection_list: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    share_list: list = dataclasses.field(default_factory=list)
+    global_open_table: dict[str, t.Any] = dataclasses.field(default_factory=dict)
+    global_session_table: dict[int, t.Any] = dataclasses.field(default_factory=dict)
+    connection_list: dict[str, t.Any] = dataclasses.field(default_factory=dict)
     server_guid: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-    server_start_time: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+    server_start_time: datetime.datetime = dataclasses.field(
+        default_factory=datetime.datetime.now
+    )
     is_dfs_capable: bool = False
     # server_side_copy_max_number_of_chunks: int = 0
     # server_side_copy_max_data_size: int = 0
     # server_hash_level: ServerHashLevel = something
-    global_lease_table_list: typing.Dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    global_lease_table_list: dict[str, t.Any] = dataclasses.field(default_factory=dict)
     # max_resiliency_timeout: int = 0
     # resilient_open_scavenger_expiry_time: int = 0
-    global_client_table: typing.Dict[uuid.UUID, typing.Any] = dataclasses.field(default_factory=dict)
+    global_client_table: dict[uuid.UUID, t.Any] = dataclasses.field(
+        default_factory=dict
+    )
     encrypt_data: bool = False
     reject_unencrypted_access: bool = False
     is_multi_channel_capable: bool = False
@@ -96,22 +101,24 @@ class ServerConfig(SMBConfig):
 
 @dataclasses.dataclass
 class ServerConnection:
-    command_sequence_window: typing.List[typing.Tuple[int, int]] = dataclasses.field(default_factory=list)
-    request_list: typing.Dict[int, "ServerRequest"] = dataclasses.field(default_factory=dict)
+    command_sequence_window: list[tuple[int, int]] = dataclasses.field(
+        default_factory=list
+    )
+    request_list: dict[int, "ServerRequest"] = dataclasses.field(default_factory=dict)
     client_capabilities: Capabilities = Capabilities.NONE
     negotiate_dialect: Dialect = Dialect.UNKNOWN
-    async_command_list: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    async_command_list: dict[int, t.Any] = dataclasses.field(default_factory=dict)
     dialect: str = "Unknown"
     should_sign: bool = False
-    client_name: typing.Optional[str] = None
+    client_name: str | None = None
     max_transact_size: int = 65536
     max_write_size: int = 65536
     max_read_size: int = 65536
     supports_multi_credit: bool = False
     transport_name: TransportIdentifier = TransportIdentifier.UNKNOWN
-    session_table: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    session_table: dict[int, t.Any] = dataclasses.field(default_factory=dict)
     creation_time: int = 0
-    preauth_session_table: typing.Dict[int, typing.Any] = dataclasses.field(default_factory=dict)
+    preauth_session_table: dict[int, t.Any] = dataclasses.field(default_factory=dict)
     # SMB 2.1
     client_guid: uuid.UUID = uuid.UUID(int=0)
     # SMB 3.x
@@ -120,15 +127,17 @@ class ServerConnection:
     server_security_mode: SecurityModes = SecurityModes.NONE
     constrained_connection: bool = True
     # SMB 3.1.1
-    preauth_integrity_hash_id: typing.Optional[HashingProvider] = None
+    preauth_integrity_hash_id: HashingProvider | None = None
     preauth_integrity_hash_value: bytes = b""
-    cipher_id: typing.Optional[EncryptionProvider] = None
-    client_dialects: typing.List[Dialect] = dataclasses.field(default_factory=list)
-    compressor: typing.Optional[CompressionProvider] = None
-    compression_ids: typing.List[CompressionAlgorithm] = dataclasses.field(default_factory=list)
+    cipher_id: EncryptionProvider | None = None
+    client_dialects: list[Dialect] = dataclasses.field(default_factory=list)
+    compressor: CompressionProvider | None = None
+    compression_ids: list[CompressionAlgorithm] = dataclasses.field(
+        default_factory=list
+    )
     supports_chained_compression: bool = False
-    rdma_transform_ids: typing.List[typing.Any] = dataclasses.field(default_factory=list)
-    signing_algorithm_id: typing.Optional[SigningProvider] = None
+    rdma_transform_ids: list[t.Any] = dataclasses.field(default_factory=list)
+    signing_algorithm_id: SigningProvider | None = None
     accept_transport_security: bool = False
 
 
@@ -137,7 +146,7 @@ class ServerRequest:
     message_id: int
     async_id: int = 0
     cancel_request_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
-    open: typing.Optional[typing.Any] = None
+    open: t.Any | None = None
     # SMB 3.x
     is_encrypted: bool = False
     transform_session_id: int = 0
@@ -152,8 +161,8 @@ class SMBServer:
     ) -> None:
         self.config = config
         self.connection: ServerConnection = ServerConnection()
-        self._data_to_send: typing.List[bytearray] = []
-        self._receive_buffer: typing.List[bytearray] = []
+        self._data_to_send: list[bytearray] = []
+        self._receive_buffer: list[bytearray] = []
 
     def send(
         self,
@@ -161,7 +170,7 @@ class SMBServer:
         message_id: int,
         status: NtStatus = NtStatus.STATUS_SUCCESS,
         credit_response: int = 0,
-        priority: typing.Optional[int] = None,
+        priority: int | None = None,
         session_id: int = 0,
         tree_id: int = 0,
         async_id: int = 0,
@@ -212,14 +221,14 @@ class SMBServer:
 
     def receive_data(
         self,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
     ) -> None:
         if data:
             self._receive_buffer.append(bytearray(data))
 
     def next_event(
         self,
-    ) -> typing.Optional[Event]:
+    ) -> Event | None:
         if not self._receive_buffer:
             return None
 
@@ -241,13 +250,20 @@ class SMBServer:
             raise NotImplementedError()
 
         if not isinstance(header, SMB2Header):
-            raise ConnectionDisconnect(f"Received unexpected SMB header sequence {type(header).__name__}")
+            raise ConnectionDisconnect(
+                f"Received unexpected SMB header sequence {type(header).__name__}"
+            )
 
-        if header.command not in [Command.NEGOTIATE, Command.SMB1_NEGOTIATE] and self.connection.negotiate_dialect in [
+        if header.command not in [
+            Command.NEGOTIATE,
+            Command.SMB1_NEGOTIATE,
+        ] and self.connection.negotiate_dialect in [
             Dialect.UNKNOWN,
             Dialect.SMB2_WILDCARD,
         ]:
-            raise ConnectionDisconnect("Expecting negotiate request before any other commands")
+            raise ConnectionDisconnect(
+                "Expecting negotiate request before any other commands"
+            )
 
         if header.command != Command.CANCEL:
             request = ServerRequest(message_id=header.message_id)
@@ -286,13 +302,20 @@ class SMBServer:
         message_offset: int,
     ) -> Event:
         message = NegotiateRequest.unpack(raw, message_offset, message_offset)
-        if self.connection.negotiate_dialect not in [Dialect.UNKNOWN, Dialect.SMB2_WILDCARD]:
-            raise ConnectionDisconnect("Received negotiate request but dialect has already been negotiated")
+        if self.connection.negotiate_dialect not in [
+            Dialect.UNKNOWN,
+            Dialect.SMB2_WILDCARD,
+        ]:
+            raise ConnectionDisconnect(
+                "Received negotiate request but dialect has already been negotiated"
+            )
 
         self.connection.client_capabilities = message.capabilities
         self.connection.client_security_mode = message.security_mode
         self.connection.client_guid = message.client_guid
-        self.connection.should_sign = bool(message.security_mode & SecurityModes.SIGNING_REQUIRED)
+        self.connection.should_sign = bool(
+            message.security_mode & SecurityModes.SIGNING_REQUIRED
+        )
         if len(message.dialects) == 0:
             raise InvalidParameter()
 
@@ -314,8 +337,8 @@ class SMBServer:
 
         self.connection.client_dialects = message.dialects
 
-        response_contexts: typing.List[NegotiateContext] = []
-        found_contexts: typing.Set[NegotiateContextType] = set()
+        response_contexts: list[NegotiateContext] = []
+        found_contexts: set[NegotiateContextType] = set()
         for context in message.negotiate_contexts:
             if self.connection.negotiate_dialect < Dialect.SMB311:
                 continue
@@ -325,21 +348,30 @@ class SMBServer:
                     raise InvalidParameter()
                 found_contexts.add(context.context_type)
 
-                available_hash_algos = {h.algorithm_id: h for h in self.config.registered_hash_algorithms or []}
+                available_hash_algos = {
+                    h.algorithm_id: h
+                    for h in self.config.registered_hash_algorithms or []
+                }
                 for h in context.hash_algorithms:
                     if h in available_hash_algos:
-                        self.connection.preauth_integrity_hash_id = available_hash_algos[h]
+                        self.connection.preauth_integrity_hash_id = (
+                            available_hash_algos[h]
+                        )
                         break
 
                 if not self.connection.preauth_integrity_hash_id:
                     raise SmbNoPreauthIntegrityHashOverlap()
 
-                self.connection.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
-                    b"\x00" * 64 + bytes(raw)
+                self.connection.preauth_integrity_hash_value = (
+                    self.connection.preauth_integrity_hash_id.hash(
+                        b"\x00" * 64 + bytes(raw)
+                    )
                 )
                 response_contexts.append(
                     PreauthIntegrityCapabilities(
-                        hash_algorithms=[self.connection.preauth_integrity_hash_id.algorithm_id],
+                        hash_algorithms=[
+                            self.connection.preauth_integrity_hash_id.algorithm_id
+                        ],
                         salt=os.urandom(32),
                     )
                 )
@@ -349,8 +381,10 @@ class SMBServer:
                     raise InvalidParameter()
                 found_contexts.add(context.context_type)
 
-                available_ciphers = {c.cipher_id: c for c in self.config.registered_ciphers or []}
-                return_ciphers: typing.List[Cipher] = []
+                available_ciphers = {
+                    c.cipher_id: c for c in self.config.registered_ciphers or []
+                }
+                return_ciphers: list[Cipher] = []
                 for c in context.ciphers:
                     if c in available_ciphers:
                         self.connection.cipher_id = available_ciphers[c]
@@ -376,10 +410,14 @@ class SMBServer:
                 can_chain = False
                 available_compressors: set[CompressionAlgorithm] = set()
                 if self.config.registered_compressor:
-                    available_compressors = set(self.config.registered_compressor.compression_ids)
+                    available_compressors = set(
+                        self.config.registered_compressor.compression_ids
+                    )
                     can_chain = self.config.registered_compressor.can_chain
                     self.connection.compressor = self.config.registered_compressor
-                    available_compressors.intersection_update(set(context.compression_algorithms))
+                    available_compressors.intersection_update(
+                        set(context.compression_algorithms)
+                    )
 
                 self.connection.compression_ids = list(available_compressors)
                 flags = CompressionCapabilityFlags.NONE
@@ -413,11 +451,16 @@ class SMBServer:
                 if len(context.signing_algorithms) == 0:
                     raise InvalidParameter()
 
-                available_sign_algos = {s.signing_id: s for s in self.config.registered_signing_algorithms or []}
+                available_sign_algos = {
+                    s.signing_id: s
+                    for s in self.config.registered_signing_algorithms or []
+                }
                 for s in context.signing_algorithms:
                     if s in available_sign_algos:
                         self.connection.signing_algorithm_id = available_sign_algos[s]
-                        response_contexts.append(SigningCapabilities(signing_algorithms=[s]))
+                        response_contexts.append(
+                            SigningCapabilities(signing_algorithms=[s])
+                        )
                         break
 
                 # If nothing was negotiated the context isn't returned and the SMB 3 default of AES CMAC is used.
@@ -430,19 +473,26 @@ class SMBServer:
                 if (
                     self.connection.transport_name == TransportIdentifier.QUIC
                     and self.config.disable_encryption_over_secure_transport
-                    and context.flags & TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY
+                    and context.flags
+                    & TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY
                 ):
                     self.connection.accept_transport_security = True
 
                 transport_flags = TransportCapabilityFlags.NONE
                 if self.connection.accept_transport_security:
-                    transport_flags |= TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY
+                    transport_flags |= (
+                        TransportCapabilityFlags.ACCEPT_TRANSPORT_LEVEL_SECURITY
+                    )
                 response_contexts.append(TransportCapabilities(flags=transport_flags))
 
-        if self.connection.negotiate_dialect >= Dialect.SMB210 and self.connection.transport_name in [
-            TransportIdentifier.UNKNOWN,
-            TransportIdentifier.DIRECT_TCP,
-        ]:
+        if (
+            self.connection.negotiate_dialect >= Dialect.SMB210
+            and self.connection.transport_name
+            in [
+                TransportIdentifier.UNKNOWN,
+                TransportIdentifier.DIRECT_TCP,
+            ]
+        ):
             self.connection.supports_multi_credit = True
 
         security_mode = SecurityModes.SIGNING_ENABLED
@@ -490,8 +540,11 @@ class SMBServer:
         self.send(response, header.message_id, credit_response=1)
 
         if self.connection.preauth_integrity_hash_id:
-            self.connection.preauth_integrity_hash_value = self.connection.preauth_integrity_hash_id.hash(
-                self.connection.preauth_integrity_hash_value + bytes(self._data_to_send[0])
+            self.connection.preauth_integrity_hash_value = (
+                self.connection.preauth_integrity_hash_id.hash(
+                    self.connection.preauth_integrity_hash_value
+                    + bytes(self._data_to_send[0])
+                )
             )
 
         return MessageReceived(header, message, data_available=True)

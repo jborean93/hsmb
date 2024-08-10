@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
-import typing
+from __future__ import annotations
+
+import typing as t
 
 from hsmb._exceptions import ProtocolError
 from hsmb.messages import (
@@ -14,7 +15,7 @@ from hsmb.messages import (
     TreeConnectResponse,
 )
 
-if typing.TYPE_CHECKING:
+if t.TYPE_CHECKING:
     from hsmb._client import (
         ClientApplicationOpenFile,
         ClientConnection,
@@ -22,7 +23,7 @@ if typing.TYPE_CHECKING:
         ClientTreeConnect,
     )
 
-MessageType = typing.TypeVar("MessageType", bound=SMBMessage)
+MessageType = t.TypeVar("MessageType", bound=SMBMessage)
 
 
 class Event:
@@ -49,11 +50,10 @@ class ErrorReceived(Event):
         )
 
 
-class Pending(ErrorReceived):
-    ...
+class Pending(ErrorReceived): ...
 
 
-class MessageReceived(Event, typing.Generic[MessageType]):
+class MessageReceived(Event, t.Generic[MessageType]):
     def __init__(
         self,
         header: SMB2Header,
@@ -78,13 +78,13 @@ class ProtocolNegotiated(MessageReceived[NegotiateResponse]):
         self,
         header: SMB2Header,
         message: NegotiateResponse,
-        connection: "ClientConnection",
+        connection: ClientConnection,
     ) -> None:
         super().__init__(header, message)
         self.connection = connection
 
     @property
-    def token(self) -> typing.Optional[bytes]:
+    def token(self) -> bytes | None:
         return self.message.security_buffer if self.message.security_buffer else None
 
     def __repr__(self) -> str:
@@ -116,7 +116,7 @@ class SessionAuthenticated(MessageReceived[SessionSetupResponse]):
         self,
         header: SMB2Header,
         message: SessionSetupResponse,
-        session: "ClientSession",
+        session: ClientSession,
         raw_data: bytes,
     ) -> None:
         super().__init__(header, message)
@@ -128,7 +128,7 @@ class SessionAuthenticated(MessageReceived[SessionSetupResponse]):
         return self.session.session_id
 
     @property
-    def token(self) -> typing.Optional[bytes]:
+    def token(self) -> bytes | None:
         return self.message.security_buffer if self.message.security_buffer else None
 
     def __repr__(self) -> str:
@@ -140,7 +140,7 @@ class TreeConnected(MessageReceived[TreeConnectResponse]):
         self,
         header: SMB2Header,
         message: TreeConnectResponse,
-        tree: "ClientTreeConnect",
+        tree: ClientTreeConnect,
     ) -> None:
         super().__init__(header, message)
         self.tree = tree
@@ -157,7 +157,7 @@ class FileOpened(MessageReceived[CreateResponse]):
         self,
         header: SMB2Header,
         message: CreateResponse,
-        open: "ClientApplicationOpenFile",
+        open: ClientApplicationOpenFile,
     ) -> None:
         super().__init__(header, message)
         self.open = open

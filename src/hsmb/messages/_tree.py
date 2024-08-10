@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import enum
 import struct
-import typing
 
 from hsmb._exceptions import MalformedPacket
 from hsmb.messages._messages import Command, SMBMessage
@@ -70,9 +70,9 @@ class TreeContext:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> "TreeContext":
+    ) -> TreeContext:
         raise NotImplementedError()
 
 
@@ -100,14 +100,14 @@ class TreeConnectRequest(SMBMessage):
 
     flags: TreeConnectFlags
     path: str
-    tree_contexts: typing.List[TreeContext]
+    tree_contexts: list[TreeContext]
 
     def __init__(
         self,
         *,
         flags: TreeConnectFlags,
         path: str,
-        tree_contexts: typing.List[TreeContext],
+        tree_contexts: list[TreeContext],
     ) -> None:
         super().__init__(Command.TREE_CONNECT)
         object.__setattr__(self, "flags", flags)
@@ -164,10 +164,10 @@ class TreeConnectRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "TreeConnectRequest":
+    ) -> TreeConnectRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 8:
@@ -176,10 +176,12 @@ class TreeConnectRequest(SMBMessage):
         flags = TreeConnectFlags(struct.unpack("<H", view[2:4])[0])
         path_offset = struct.unpack("<H", view[4:6])[0] - offset_from_header
         path_length = struct.unpack("<H", view[6:8])[0]
-        path_name = bytes(view[path_offset : path_offset + path_length]).decode("utf-16-le")
+        path_name = bytes(view[path_offset : path_offset + path_length]).decode(
+            "utf-16-le"
+        )
         end_idx = path_offset + path_length
 
-        contexts: typing.List[TreeContext] = []
+        contexts: list[TreeContext] = []
         if flags & TreeConnectFlags.EXTENSION_PRESENT:
             if len(view) < 14:
                 raise MalformedPacket(f"{cls.__name__} buffer is too small")
@@ -248,10 +250,10 @@ class TreeConnectResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "TreeConnectResponse":
+    ) -> TreeConnectResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
@@ -288,10 +290,10 @@ class TreeDisconnectRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "TreeDisconnectRequest":
+    ) -> TreeDisconnectRequest:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
@@ -317,10 +319,10 @@ class TreeDisconnectResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "TreeDisconnectResponse":
+    ) -> TreeDisconnectResponse:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
@@ -359,8 +361,8 @@ def pack_tree_context(
 
 
 def unpack_tree_context(
-    data: typing.Union[bytes, bytearray, memoryview],
-) -> typing.Tuple[TreeContext, int]:
+    data: bytes | bytearray | memoryview,
+) -> tuple[TreeContext, int]:
     """Unpack the Tree Connect Context bytes.
 
     Unpacks the Tree Connect context bytes value to the object it represents.
@@ -389,7 +391,7 @@ def unpack_tree_context(
     if len(view) < (8 + context_length):
         raise MalformedPacket("Tree context payload is too small")
 
-    context_cls: typing.Optional[typing.Type[TreeContext]] = {
+    context_cls: type[TreeContext] | None = {
         TreeContextType.REMOTED_IDENTITY: RemotedIdentity,
     }.get(context_type, None)
     if not context_cls:

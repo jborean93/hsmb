@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import base64
 import dataclasses
 import enum
 import struct
-import typing
 
 from hsmb._exceptions import MalformedPacket
 from hsmb.messages._messages import Command
@@ -19,7 +19,9 @@ class HeaderFlags(enum.IntFlag):
     NONE = 0x00000000  #: No flags are set
     SERVER_TO_REDIR = 0x00000001  #: Message is a response from the server
     ASYNC_COMMAND = 0x00000002  #: Indicates the async_id field is set
-    RELATED_OPERATIONS = 0x00000004  #: The request is part of a related compound request
+    RELATED_OPERATIONS = (
+        0x00000004  #: The request is part of a related compound request
+    )
     SIGNED = 0x00000008  #: The header is signed
     PRIORITY_MASK = 0x00000070  #: Mask used to set a priority between 0 and 7
     DFS_OPERATIONS = 0x10000000  #: The command is a DFS operation
@@ -75,9 +77,9 @@ class SMBHeader:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["SMBHeader", int]:
+    ) -> tuple[SMBHeader, int]:
         """Unpack the SMB Header bytes.
 
         Unpacks the SMB header bytes value to the object it represents. The
@@ -102,7 +104,7 @@ class SMBHeader:
             raise MalformedPacket(f"Not enough data to unpack SMB header payload")
 
         protocol_id = bytes(view[:4])
-        header_cls: typing.Type[SMBHeader]
+        header_cls: type[SMBHeader]
         if protocol_id == b"\xFFSMB":
             header_cls = SMB1Header
         elif protocol_id == b"\xFESMB":
@@ -112,14 +114,25 @@ class SMBHeader:
         elif protocol_id == b"\xFCSMB":
             header_cls = CompressionTransform
         else:
-            raise MalformedPacket(f"Unknown SMB Header protocol id {base64.b16encode(protocol_id).decode()}")
+            raise MalformedPacket(
+                f"Unknown SMB Header protocol id {base64.b16encode(protocol_id).decode()}"
+            )
 
         return header_cls.unpack(data)
 
 
 @dataclasses.dataclass(frozen=True)
 class SMB1Header(SMBHeader):
-    __slots__ = ("command", "status", "flags", "pid", "tid", "uid", "mid", "security_features")
+    __slots__ = (
+        "command",
+        "status",
+        "flags",
+        "pid",
+        "tid",
+        "uid",
+        "mid",
+        "security_features",
+    )
 
     command: int
     status: int
@@ -128,7 +141,7 @@ class SMB1Header(SMBHeader):
     tid: int
     uid: int
     mid: int
-    security_features: typing.Optional[bytes]
+    security_features: bytes | None
 
     def __init__(
         self,
@@ -140,7 +153,7 @@ class SMB1Header(SMBHeader):
         tid: int,
         uid: int,
         mid: int,
-        security_features: typing.Optional[bytes] = None,
+        security_features: bytes | None = None,
     ) -> None:
         super().__init__(b"\xFFSMB")
         object.__setattr__(self, "command", command)
@@ -178,9 +191,9 @@ class SMB1Header(SMBHeader):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["SMB1Header", int]:
+    ) -> tuple[SMB1Header, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 32:
@@ -282,7 +295,9 @@ class SMB2Header(SMBHeader):
         if self.flags & HeaderFlags.ASYNC_COMMAND:
             async_tree_id_field = self.async_id.to_bytes(8, byteorder="little")
         else:
-            async_tree_id_field = b"\x00\x00\x00\x00" + self.tree_id.to_bytes(4, byteorder="little")
+            async_tree_id_field = b"\x00\x00\x00\x00" + self.tree_id.to_bytes(
+                4, byteorder="little"
+            )
 
         return bytearray().join(
             [
@@ -304,9 +319,9 @@ class SMB2Header(SMBHeader):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["SMB2Header", int]:
+    ) -> tuple[SMB2Header, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 64:
@@ -392,9 +407,9 @@ class TransformHeader(SMBHeader):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["TransformHeader", int]:
+    ) -> tuple[TransformHeader, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 52:
@@ -430,14 +445,16 @@ class CompressionTransform(SMBHeader):
         original_compressed_segment_size: int,
     ) -> None:
         super().__init__(b"\xFCSMB")
-        object.__setattr__(self, "original_compressed_segment_size", original_compressed_segment_size)
+        object.__setattr__(
+            self, "original_compressed_segment_size", original_compressed_segment_size
+        )
 
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["CompressionTransform", int]:
+    ) -> tuple[CompressionTransform, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 12:
@@ -470,7 +487,9 @@ class CompressionTransformUnchained(CompressionTransform):
         offset: int,
         data: memoryview,
     ) -> None:
-        super().__init__(original_compressed_segment_size=original_compressed_segment_size)
+        super().__init__(
+            original_compressed_segment_size=original_compressed_segment_size
+        )
         object.__setattr__(self, "compression_algorithm", compression_algorithm)
         object.__setattr__(self, "flags", flags)
         object.__setattr__(self, "offset", offset)
@@ -491,9 +510,9 @@ class CompressionTransformUnchained(CompressionTransform):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["CompressionTransformUnchained", int]:
+    ) -> tuple[CompressionTransformUnchained, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
@@ -521,16 +540,20 @@ class CompressionTransformChained(CompressionTransform):
 
     __slots__ = ("compression_payload_header",)
 
-    compression_payload_header: typing.List["CompressionChainedPayloadHeader"]
+    compression_payload_header: list[CompressionChainedPayloadHeader]
 
     def __init__(
         self,
         *,
         original_compressed_segment_size: int,
-        compression_payload_header: typing.List["CompressionChainedPayloadHeader"],
+        compression_payload_header: list[CompressionChainedPayloadHeader],
     ) -> None:
-        super().__init__(original_compressed_segment_size=original_compressed_segment_size)
-        object.__setattr__(self, "compression_payload_header", compression_payload_header)
+        super().__init__(
+            original_compressed_segment_size=original_compressed_segment_size
+        )
+        object.__setattr__(
+            self, "compression_payload_header", compression_payload_header
+        )
 
     def pack(self) -> bytearray:
         buffer = bytearray()
@@ -548,16 +571,16 @@ class CompressionTransformChained(CompressionTransform):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["CompressionTransformChained", int]:
+    ) -> tuple[CompressionTransformChained, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 16:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
 
         original_compressed_segment_size = struct.unpack("<I", view[4:8])[0]
-        payloads: typing.List["CompressionChainedPayloadHeader"] = []
+        payloads: list[CompressionChainedPayloadHeader] = []
         end_idx = 8
 
         while end_idx < len(view):
@@ -606,9 +629,9 @@ class CompressionChainedPayloadHeader:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["CompressionChainedPayloadHeader", int]:
+    ) -> tuple[CompressionChainedPayloadHeader, int]:
         view = memoryview(data[offset:])
 
         if len(view) < 8:
@@ -661,9 +684,9 @@ class CompressionPatternPayloadV1:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> typing.Tuple["CompressionPatternPayloadV1", int]:
+    ) -> tuple[CompressionPatternPayloadV1, int]:
         view = memoryview(data)[offset:]
 
         if len(view) < 8:

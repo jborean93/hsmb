@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
-# MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+from __future__ import annotations
 
 import pytest
 
@@ -23,12 +21,16 @@ from hsmb.messages import (
 
 
 def test_unpack_header_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack SMB header payload"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack SMB header payload"
+    ):
         SMBHeader.unpack(b"123")
 
 
 def test_unpack_header_invalid_protocol() -> None:
-    with pytest.raises(MalformedPacket, match="Unknown SMB Header protocol id 11223344"):
+    with pytest.raises(
+        MalformedPacket, match="Unknown SMB Header protocol id 11223344"
+    ):
         SMBHeader.unpack(b"\x11\x22\x33\x44")
 
 
@@ -215,12 +217,16 @@ def test_transform_header_unpack() -> None:
 
 
 def test_transform_header_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack TransformHeader"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack TransformHeader"
+    ):
         SMBHeader.unpack(b"\xFDSMB123")
 
 
 def test_comp_transform_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack CompressionTransform"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack CompressionTransform"
+    ):
         SMBHeader.unpack(b"\xFCSMB123")
 
 
@@ -260,7 +266,9 @@ def test_comp_unchained_unpack() -> None:
 
 
 def test_comp_transform_unchained_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack CompressionTransformUnchained"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack CompressionTransformUnchained"
+    ):
         SMBHeader.unpack(b"\xFCSMB\x0A\x00\x00\x00\x02\x00\x00\x00")
 
 
@@ -319,16 +327,28 @@ def test_comp_transform_chained_unpack() -> None:
     assert actual_header.original_compressed_segment_size == 10
     assert isinstance(actual_header.compression_payload_header, list)
     assert len(actual_header.compression_payload_header) == 2
-    assert actual_header.compression_payload_header[0].compression_algorithm == CompressionAlgorithm.NONE
+    assert (
+        actual_header.compression_payload_header[0].compression_algorithm
+        == CompressionAlgorithm.NONE
+    )
     assert actual_header.compression_payload_header[0].flags == CompressionFlags.CHAINED
-    assert actual_header.compression_payload_header[0].data == memoryview(b"\x11\x22\x33\x44")
-    assert actual_header.compression_payload_header[1].compression_algorithm == CompressionAlgorithm.LZ77_HUFFMAN
+    assert actual_header.compression_payload_header[0].data == memoryview(
+        b"\x11\x22\x33\x44"
+    )
+    assert (
+        actual_header.compression_payload_header[1].compression_algorithm
+        == CompressionAlgorithm.LZ77_HUFFMAN
+    )
     assert actual_header.compression_payload_header[1].flags == CompressionFlags.NONE
-    assert actual_header.compression_payload_header[1].data == memoryview(b"\x55\x66\x77\x88")
+    assert actual_header.compression_payload_header[1].data == memoryview(
+        b"\x55\x66\x77\x88"
+    )
 
 
 def test_comp_transform_chained_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack CompressionTransformChained"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack CompressionTransformChained"
+    ):
         SMBHeader.unpack(b"\xFCSMB\x0A\x00\x00\x00\x02\x00\x01\x00")
 
 
@@ -357,13 +377,21 @@ def test_comp_chained_header_unpack() -> None:
 
 
 def test_comp_chained_header_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack CompressionChainedPayloadHeader"):
+    with pytest.raises(
+        MalformedPacket,
+        match="Not enough data to unpack CompressionChainedPayloadHeader",
+    ):
         CompressionChainedPayloadHeader.unpack(b"\x11\x22\x33\x44\x55\x66\x77")
 
 
 def test_comp_chained_header_unpack_out_of_bounds() -> None:
-    with pytest.raises(MalformedPacket, match="Data for CompressionChainedPayloadHeader is out of bound"):
-        SMBHeader.unpack(b"\xFCSMB\x0A\x00\x00\x00\x02\x00\x01\x00\x04\x00\x00\x00\x11\x22\x33")
+    with pytest.raises(
+        MalformedPacket,
+        match="Data for CompressionChainedPayloadHeader is out of bound",
+    ):
+        SMBHeader.unpack(
+            b"\xFCSMB\x0A\x00\x00\x00\x02\x00\x01\x00\x04\x00\x00\x00\x11\x22\x33"
+        )
 
 
 def test_comp_pattern_v1_pack() -> None:
@@ -374,7 +402,7 @@ def test_comp_pattern_v1_pack() -> None:
     assert actual == b"\x01\x00\x00\x00\x0A\x00\x00\x00"
 
 
-def test_comp_pattern_v1_unpack():
+def test_comp_pattern_v1_unpack() -> None:
     data = b"\x01\x00\x00\x00\x0A\x00\x00\x00"
 
     actual_header, actual_size = CompressionPatternPayloadV1.unpack(data)
@@ -386,5 +414,7 @@ def test_comp_pattern_v1_unpack():
 
 
 def test_comp_pattern_v1_unpack_too_small() -> None:
-    with pytest.raises(MalformedPacket, match="Not enough data to unpack CompressionPatternPayloadV1"):
+    with pytest.raises(
+        MalformedPacket, match="Not enough data to unpack CompressionPatternPayloadV1"
+    ):
         CompressionPatternPayloadV1.unpack(b"\x11\x22\x33\x44\x55\x66\x77")

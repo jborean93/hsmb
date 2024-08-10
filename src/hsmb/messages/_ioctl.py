@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import enum
 import struct
-import typing
 import uuid
 
 from hsmb._exceptions import MalformedPacket
@@ -44,7 +44,7 @@ class ValidateNegotiateInfoRequest:
     capabilities: Capabilities
     guid: uuid.UUID
     security_mode: SecurityModes
-    dialects: typing.List[Dialect]
+    dialects: list[Dialect]
 
     ctl_code: CtlCode = CtlCode.VALIDATE_NEGOTIATE_INFO
     file_id: bytes = b"\xFF" * 16
@@ -57,7 +57,7 @@ class ValidateNegotiateInfoRequest:
         capabilities: Capabilities,
         guid: uuid.UUID,
         security_mode: SecurityModes,
-        dialects: typing.List[Dialect],
+        dialects: list[Dialect],
     ) -> None:
         super().__init__()
         object.__setattr__(self, "capabilities", capabilities)
@@ -81,9 +81,9 @@ class ValidateNegotiateInfoRequest:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> "ValidateNegotiateInfoRequest":
+    ) -> ValidateNegotiateInfoRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
@@ -98,13 +98,18 @@ class ValidateNegotiateInfoRequest:
             raise MalformedPacket(f"{cls.__name__} dialect buffer is out of bounds")
 
         end_idx = 24
-        dialects: typing.List[Dialect] = []
+        dialects: list[Dialect] = []
         for _ in range(dialect_count):
-            dialects.append(Dialect(struct.unpack("<H", view[end_idx : end_idx + 2])[0]))
+            dialects.append(
+                Dialect(struct.unpack("<H", view[end_idx : end_idx + 2])[0])
+            )
             end_idx += 2
 
         return ValidateNegotiateInfoRequest(
-            capabilities=capabilities, guid=guid, security_mode=security_mode, dialects=dialects
+            capabilities=capabilities,
+            guid=guid,
+            security_mode=security_mode,
+            dialects=dialects,
         )
 
 
@@ -151,9 +156,9 @@ class ValidateNegotiateInfoResponse:
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset: int = 0,
-    ) -> "ValidateNegotiateInfoResponse":
+    ) -> ValidateNegotiateInfoResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
@@ -165,13 +170,24 @@ class ValidateNegotiateInfoResponse:
         dialect = Dialect(struct.unpack("<H", view[22:24])[0])
 
         return ValidateNegotiateInfoResponse(
-            capabilities=capabilities, guid=guid, security_mode=security_mode, dialect=dialect
+            capabilities=capabilities,
+            guid=guid,
+            security_mode=security_mode,
+            dialect=dialect,
         )
 
 
 @dataclasses.dataclass(frozen=True)
 class IOCTLRequest(SMBMessage):
-    __slots__ = ("ctl_code", "file_id", "flags", "max_input_response", "max_output_response", "input", "output")
+    __slots__ = (
+        "ctl_code",
+        "file_id",
+        "flags",
+        "max_input_response",
+        "max_output_response",
+        "input",
+        "output",
+    )
 
     ctl_code: int
     file_id: bytes
@@ -240,10 +256,10 @@ class IOCTLRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "IOCTLRequest":
+    ) -> IOCTLRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 56:
@@ -351,10 +367,10 @@ class IOCTLResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "IOCTLResponse":
+    ) -> IOCTLResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 48:

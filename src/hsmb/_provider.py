@@ -1,6 +1,7 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 """The crypto/compression provider interfaces.
 
@@ -9,7 +10,6 @@ connection.
 """
 
 import abc
-import typing
 
 from hsmb.messages import (
     Cipher,
@@ -136,7 +136,7 @@ class CompressionProvider(metaclass=abc.ABCMeta):
 
     @property
     @abc.abstractmethod
-    def compression_ids(self) -> typing.List[CompressionAlgorithm]:
+    def compression_ids(self) -> list[CompressionAlgorithm]:
         """A list of compression algorithms the provider implements."""
 
     @property
@@ -147,9 +147,9 @@ class CompressionProvider(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def compress(
         self,
-        algorithms: typing.List[CompressionAlgorithm],
+        algorithms: list[CompressionAlgorithm],
         data: bytearray,
-        hints: typing.List[slice],
+        hints: list[slice],
         supports_chaining: bool,
     ) -> bytearray:
         """Compresses the data.

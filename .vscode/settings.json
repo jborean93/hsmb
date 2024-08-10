@@ -1,23 +1,26 @@
 {
+    "black-formatter.importStrategy": "fromEnvironment",
     "editor.formatOnSave": true,
     "editor.rulers": [
         80,
         120
     ],
-    "files.trimTrailingWhitespace": true,
     "editor.trimAutoWhitespace": true,
-    "python.formatting.provider": "black",
-    "python.linting.mypyEnabled": true,
+    "files.trimTrailingWhitespace": true,
+    "mypy-type-checker.importStrategy": "fromEnvironment",
+    "python.analysis.extraPaths": [
+        "src",
+    ],
     "python.testing.pytestArgs": [
         "tests",
-        "-vv"
+        "-vv",
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.nosetestsEnabled": false,
     "python.testing.pytestEnabled": true,
     "[python]": {
+        "editor.defaultFoldingRangeProvider": "ms-python.black-formatter",
         "editor.codeActionsOnSave": {
-            "source.organizeImports": true
+            "source.organizeImports": "explicit"
         },
     },
 }

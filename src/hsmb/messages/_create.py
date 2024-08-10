@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import enum
 import struct
-import typing
 
 from hsmb._exceptions import MalformedPacket
 from hsmb.messages._messages import Command, SMBMessage
@@ -108,7 +108,7 @@ class CreateRequest(SMBMessage):
     create_disposition: CreateDisposition
     create_options: CreateOptions
     name: str
-    create_contexts: typing.List
+    create_contexts: list
     security_flags: int
     smb_create_flags: int
 
@@ -123,7 +123,7 @@ class CreateRequest(SMBMessage):
         create_disposition: CreateDisposition,
         create_options: CreateOptions,
         name: str,
-        create_contexts: typing.Optional[typing.List] = None,
+        create_contexts: list | None = None,
         security_flags: int = 0,
         smb_create_flags: int = 0,
     ) -> None:
@@ -189,10 +189,10 @@ class CreateRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "CreateRequest":
+    ) -> CreateRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 57:
@@ -221,12 +221,14 @@ class CreateRequest(SMBMessage):
 
             name = bytes(view[name_offset:name_end]).decode("utf-16-le")
 
-        contexts: typing.List = []
+        contexts: list = []
         contexts_end = 0
         if contexts_length:
             contexts_end = contexts_offset + contexts_length
             if len(view) < contexts_end:
-                raise MalformedPacket(f"{cls.__name__} contexts buffer is out of bounds")
+                raise MalformedPacket(
+                    f"{cls.__name__} contexts buffer is out of bounds"
+                )
             # FIXME: unpack contexts
 
         return CreateRequest(
@@ -272,7 +274,7 @@ class CreateResponse(SMBMessage):
     end_of_file: int
     file_attributes: int
     file_id: bytes
-    create_contexts: typing.List
+    create_contexts: list
 
     def __init__(
         self,
@@ -288,7 +290,7 @@ class CreateResponse(SMBMessage):
         end_of_file: int,
         file_attributes: int,
         file_id: bytes,
-        create_contexts: typing.Optional[typing.List] = None,
+        create_contexts: list | None = None,
     ) -> None:
         super().__init__(Command.CREATE)
         object.__setattr__(self, "oplock_level", oplock_level)
@@ -351,10 +353,10 @@ class CreateResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "CreateResponse":
+    ) -> CreateResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 88:
@@ -375,7 +377,7 @@ class CreateResponse(SMBMessage):
         contexts_length = struct.unpack("<I", view[84:88])[0]
 
         end_idx = 88  # FIXME: should this be 89 is there a end byte if no contexts
-        contexts: typing.List = []
+        contexts: list = []
         if contexts_length:
             end_idx = contexts_offset + contexts_length
             if len(view) < end_idx:
@@ -431,10 +433,10 @@ class CloseRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "CloseRequest":
+    ) -> CloseRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
@@ -512,10 +514,10 @@ class CloseResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "CloseResponse":
+    ) -> CloseResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 60:

@@ -1,13 +1,10 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
 
-import enum
-import struct
-import typing
+from __future__ import annotations
 
-if typing.TYPE_CHECKING:
-    from hsmb.messages._header import SMB2Header
+import enum
+import typing as t
 
 
 class NtStatus(enum.IntEnum):
@@ -72,35 +69,6 @@ class NtStatus(enum.IntEnum):
     STATUS_SMB_NO_PREAUTH_INTEGRITY_HASH_OVERLAP = 0xC05D0000
 
 
-def unpack_error_response(
-    header: "SMB2Header",
-    message: typing.Union[bytes, bytearray, memoryview],
-    offset: int = 0,
-    context: typing.Optional[str] = None,
-) -> "ProtocolError":
-    view = memoryview(message)[offset:]
-
-    if len(view) < 8:
-        raise MalformedPacket("Error response buffer is out of bounds")
-
-    context_count = struct.unpack("<B", view[2:3])[0]
-    byte_count = struct.unpack("<I", view[4:8])[0]
-
-    errors: typing.List = []
-    end_idx = 8
-    if context_count:
-        raise NotImplementedError()  # FIXME
-
-    elif byte_count:
-        end_idx += byte_count
-        if len(view) < end_idx:
-            raise MalformedPacket("Error response error data is out of bounds")
-
-        errors.append(bytes(view[8:end_idx]))
-
-    return ProtocolError(header.status, message=context, error_data=errors)
-
-
 class SMBError(Exception):
     """Base class for all exception in hsmb."""
 
@@ -114,14 +82,14 @@ class MalformedPacket(SMBError):
 
 
 class _SMBErrorRegistry(type):
-    __registry: typing.Dict[int, typing.Type] = {}
+    __registry: dict[int, type] = {}
 
     def __new__(
         mcls,
         name: str,
-        bases: typing.Tuple[typing.Type, ...],
-        namespace: typing.Dict[str, typing.Any],
-    ) -> "_SMBErrorRegistry":
+        bases: tuple[type, ...],
+        namespace: dict[str, t.Any],
+    ) -> _SMBErrorRegistry:
         cls = super().__new__(mcls, name, bases, namespace)
 
         code = getattr(cls, "_STATUS_CODE", None)
@@ -132,17 +100,23 @@ class _SMBErrorRegistry(type):
 
     def __call__(
         cls,
-        status: typing.Optional[int] = None,
-        *args: typing.Any,
-        message: typing.Optional[str] = None,
-        error_data: typing.Optional[typing.List[typing.Any]] = None,
-        **kwargs: typing.Any,
+        status: int | None = None,
+        *args: t.Any,
+        message: str | None = None,
+        error_data: list[t.Any] | None = None,
+        **kwargs: t.Any,
     ) -> object:
-        status_code = status if status is not None else getattr(cls, "_STATUS_CODE", 0xFFFFFFFF)
+        status_code = (
+            status if status is not None else getattr(cls, "_STATUS_CODE", 0xFFFFFFFF)
+        )
         new_cls = cls.__registry.get(status_code, cls)
 
-        return super(_SMBErrorRegistry, new_cls).__call__(
-            status_code, message=message, error_data=error_data, *args, **kwargs
+        return super(_SMBErrorRegistry, new_cls).__call__(  # type: ignore[misc]
+            status_code,
+            message=message,
+            error_data=error_data,
+            *args,
+            **kwargs,
         )
 
 
@@ -155,8 +129,8 @@ class ProtocolError(SMBError, metaclass=_SMBErrorRegistry):
         self,
         status: int = 0xFFFFFFFF,
         *,
-        message: typing.Optional[str] = None,
-        error_data: typing.Optional[typing.List[typing.Any]] = None,
+        message: str | None = None,
+        error_data: list[t.Any] | None = None,
     ) -> None:
         self.status = status
         self.error_data = error_data
@@ -250,13 +224,16 @@ class NoSuchFile(ProtocolError):
 
 
 class InvalidDeviceRequest(ProtocolError):
-    _BASE_MESSAGE = "The specified request is not a valid operation for the target device."
+    _BASE_MESSAGE = (
+        "The specified request is not a valid operation for the target device."
+    )
     _STATUS_CODE = NtStatus.STATUS_INVALID_DEVICE_REQUEST
 
 
 class MoreProcessingRequired(ProtocolError):
     _BASE_MESSAGE = (
-        "The specified I/O request packet (IRP) cannot be disposed of because the I/O operation is not " "complete."
+        "The specified I/O request packet (IRP) cannot be disposed of because the I/O operation is not "
+        "complete."
     )
     _STATUS_CODE = NtStatus.STATUS_MORE_PROCESSING_REQUIRED
 
@@ -302,7 +279,9 @@ class ObjectPathSyntaxBad(ProtocolError):
 
 
 class SharingViolation(ProtocolError):
-    _BASE_MESSAGE = "A file cannot be opened because the share access flags are incompatible."
+    _BASE_MESSAGE = (
+        "A file cannot be opened because the share access flags are incompatible."
+    )
     _STATUS_CODE = NtStatus.STATUS_SHARING_VIOLATION
 
 
@@ -343,7 +322,8 @@ class WrongPassword(ProtocolError):
 
 class LogonFailure(ProtocolError):
     _BASE_MESSAGE = (
-        "The attempted logon is invalid. This is either due to a bad username or authentication " "information."
+        "The attempted logon is invalid. This is either due to a bad username or authentication "
+        "information."
     )
     _STATUS_CODE = NtStatus.STATUS_LOGON_FAILURE
 
@@ -359,7 +339,9 @@ class InsufficientResources(ProtocolError):
 
 
 class PipeNotAvailable(ProtocolError):
-    _BASE_MESSAGE = "An instance of a named pipe cannot be found in the listening state."
+    _BASE_MESSAGE = (
+        "An instance of a named pipe cannot be found in the listening state."
+    )
     _STATUS_CODE = NtStatus.STATUS_PIPE_NOT_AVAILABLE
 
 
@@ -433,7 +415,9 @@ class Cancelled(ProtocolError):
 
 
 class CannotDelete(ProtocolError):
-    _BASE_MESSAGE = "An attempt has been made to remove a file or directory that cannot be deleted."
+    _BASE_MESSAGE = (
+        "An attempt has been made to remove a file or directory that cannot be deleted."
+    )
     _STATUS_CODE = NtStatus.STATUS_CANNOT_DELETE
 
 
@@ -461,7 +445,9 @@ class NotFound(ProtocolError):
 
 
 class PathNotCovered(ProtocolError):
-    _BASE_MESSAGE = "The contacted server does not support the indicated part of the DFS namespace."
+    _BASE_MESSAGE = (
+        "The contacted server does not support the indicated part of the DFS namespace."
+    )
     _STATUS_CODE = NtStatus.STATUS_PATH_NOT_COVERED
 
 

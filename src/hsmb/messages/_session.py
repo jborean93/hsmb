@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
+# Copyright: (c) 2024, Jordan Borean (@jborean93) <jborean93@gmail.com>
 # MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+
+from __future__ import annotations
 
 import dataclasses
 import enum
 import struct
-import typing
 
 from hsmb._exceptions import MalformedPacket
 from hsmb.messages._messages import Command, SMBMessage
@@ -25,7 +25,14 @@ class SessionSetupFlags(enum.IntFlag):
 
 @dataclasses.dataclass(frozen=True)
 class SessionSetupRequest(SMBMessage):
-    __slots__ = ("flags", "security_mode", "capabilities", "channel", "previous_session_id", "security_buffer")
+    __slots__ = (
+        "flags",
+        "security_mode",
+        "capabilities",
+        "channel",
+        "previous_session_id",
+        "security_buffer",
+    )
 
     flags: SessionSetupFlags
     security_mode: SecurityModes
@@ -73,10 +80,10 @@ class SessionSetupRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "SessionSetupRequest":
+    ) -> SessionSetupRequest:
         view = memoryview(data)[offset:]
 
         if len(view) < 24:
@@ -138,10 +145,10 @@ class SessionSetupResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "SessionSetupResponse":
+    ) -> SessionSetupResponse:
         view = memoryview(data)[offset:]
 
         if len(view) < 8:
@@ -176,10 +183,10 @@ class LogoffRequest(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "LogoffRequest":
+    ) -> LogoffRequest:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")
@@ -205,10 +212,10 @@ class LogoffResponse(SMBMessage):
     @classmethod
     def unpack(
         cls,
-        data: typing.Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         offset_from_header: int,
         offset: int = 0,
-    ) -> "LogoffResponse":
+    ) -> LogoffResponse:
         view = memoryview(data)[offset:]
         if len(view) < 4:
             raise MalformedPacket(f"Not enough data to unpack {cls.__name__}")

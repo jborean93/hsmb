@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-# Copyright: (c) 2021, Jordan Borean (@jborean93) <jborean93@gmail.com>
-# MIT License (see LICENSE or https://opensource.org/licenses/MIT)
+from __future__ import annotations
 
 import hsmb
 
@@ -14,4 +12,3 @@ def test_negotiate() -> None:
     a = s.next_event()
     c.receive_data(s.data_to_send())
     b = c.next_event()
-    a = ""
